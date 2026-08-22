@@ -17,6 +17,7 @@ import (
 	"yoink/internal/envvar"
 	"yoink/internal/generator"
 	"yoink/internal/git"
+	"yoink/internal/graph"
 	"yoink/internal/healer"
 	"yoink/internal/httpcheck"
 	"yoink/internal/infra"
@@ -63,7 +64,7 @@ Flags:
   --no-build      Skip the build/heal loop even when docker is available
   --heal-tries    Maximum heal-loop attempts (default: 3)`,
 	Args: cobra.MaximumNArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
+	RunE: func(cmd *cobra.Command, args []string) error {
 		repo := ""
 		if len(args) > 0 {
 			repo = args[0]
@@ -71,8 +72,9 @@ Flags:
 		if err := runInit(cmd, repo); err != nil {
 			fmt.Println()
 			fmt.Println(ui.ErrorBox.Render(fmt.Sprintf("Error: %s", err.Error())))
-			os.Exit(1)
+			return err
 		}
+		return nil
 	},
 }
 
@@ -162,6 +164,10 @@ func runInit(cmd *cobra.Command, repoURL string) error {
 	ia := newInitAgent(cfg, targetDir, io)
 	fileCount, sizeBytes, _ := git.CountFiles(targetDir)
 	io.success(fmt.Sprintf("%s cloned (%d files · %.1f MB)", parsed.Repo, fileCount, float64(sizeBytes)/1024/1024))
+	if existing := existingDockerConfig(targetDir); len(existing) > 0 {
+		io.warn("Existing Docker configuration detected: " + strings.Join(existing, ", "))
+		io.info("Yoink will replace the generated stack in yoink-outputs; existing files are preserved.")
+	}
 
 	// Step 2: tree.
 	io.step(2, totalSteps, "Generate repository tree")
@@ -256,6 +262,10 @@ func runInit(cmd *cobra.Command, repoURL string) error {
 	for i, r := range envResults {
 		injected := map[string]string{}
 		for _, link := range inference.Links[r.ServiceID] {
+			if service := findInfra(inference.Services, link.ServiceName); service != nil && service.Mode == "external" {
+				envResults[i].EnvContent = infra.ClearGeneratedConnectionPlaceholders(envResults[i].EnvContent)
+				continue
+			}
 			for k, v := range link.EnvVars {
 				if _, dupe := injected[k]; !dupe {
 					injected[k] = v
@@ -285,11 +295,24 @@ func runInit(cmd *cobra.Command, repoURL string) error {
 		}
 	}
 
+	serviceGraph := graph.Build(detection.Services, inference.Services, inference.Links, nil)
+	for i, result := range envResults {
+		if bindings := serviceGraph.InternalBindings(detection.Services)[result.ServiceID]; len(bindings) > 0 {
+			envResults[i].EnvContent = infra.ReplaceEnvValues(result.EnvContent, bindings)
+			for serviceIndex := range detection.Services {
+				if detection.Services[serviceIndex].ID == result.ServiceID {
+					detection.Services[serviceIndex].BuildEnv = parseEnvContent(envResults[i].EnvContent)
+					break
+				}
+			}
+		}
+	}
 	out := generator.Build(detection.Services, generator.Options{
 		Repo:         parsed.Repo,
 		OutputSubdir: initOutputDir,
 		Infra:        inference.Services,
 		Links:        inference.Links,
+		AppLinks:     serviceGraph.AppLinks(),
 		PortFn:       allocator.Allocate,
 	})
 	if !io.quiet {
@@ -328,7 +351,9 @@ func runInit(cmd *cobra.Command, repoURL string) error {
 
 	// Pre-flight: validate the generated compose + Dockerfiles before
 	// wasting an expensive build round on malformed output.
+	preflightBlocked := false
 	if issues := preflight.Check(out.Files["docker-compose.yml"], out.Files, outputDir); preflight.HasErrors(issues) {
+		preflightBlocked = true
 		io.warn("Pre-flight validation found errors:")
 		fmt.Print(preflight.FormatIssues(issues))
 		io.info("Fix the above or re-run with --no-build to skip the build.")
@@ -353,7 +378,69 @@ func runInit(cmd *cobra.Command, repoURL string) error {
 		fmt.Println(ui.SuccessBox.Render(renderCompletionSummary(projectName, outputDir, targetDir, initOutputDir, time.Since(start), healResult)))
 		fmt.Println()
 	}
+	if preflightBlocked {
+		return initStateError{state: "blocked", message: "generated artifacts failed pre-flight validation"}
+	}
+	if healErr != nil {
+		return initStateError{state: "failed", message: healErr.Error()}
+	}
+	if healResult != nil && !healResult.Success {
+		state := healResult.Summary
+		if state == "" {
+			state = "blocked"
+		}
+		code := 3
+		if state == "configuration_required" {
+			code = 2
+		} else if state == "failed" {
+			code = 4
+		}
+		return initStateError{state: state, code: code, message: "initialization did not reach a verified running state"}
+	}
 	return nil
+}
+
+func existingDockerConfig(root string) []string {
+	names := []string{"Dockerfile", "docker-compose.yml", "docker-compose.yaml", "compose.yaml", "docker-compose.override.yml", "docker-compose.override.yaml"}
+	var found []string
+	for _, name := range names {
+		if _, err := os.Stat(filepath.Join(root, name)); err == nil {
+			found = append(found, name)
+		}
+	}
+	return found
+}
+
+func findInfra(services []infra.Service, name string) *infra.Service {
+	for i := range services {
+		if services[i].Name == name {
+			return &services[i]
+		}
+	}
+	return nil
+}
+
+type initStateError struct {
+	state   string
+	code    int
+	message string
+}
+
+func (e initStateError) Error() string {
+	return fmt.Sprintf("%s: %s", strings.ToUpper(e.state), e.message)
+}
+
+func (e initStateError) ExitCode() int {
+	if e.code != 0 {
+		return e.code
+	}
+	switch e.state {
+	case "configuration_required":
+		return 2
+	case "failed":
+		return 4
+	}
+	return 3
 }
 
 // extractPortMap reads the generated compose YAML to map service ID -> host

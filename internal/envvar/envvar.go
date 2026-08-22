@@ -101,6 +101,7 @@ func Detect(rootDir string, services []detector.Service) []Result {
 			ServiceType: svc.Type,
 			Technology:  svc.Framework,
 			Vars:        vars,
+			EnvContent:  existingEnvContent(serviceDir),
 		}
 		// Populate Deps for infra inference (second evidence source:
 		// package deps → backing service, even without env vars).
@@ -304,6 +305,19 @@ func scanEnvExampleFiles(dir string, vars map[string]*EnvVar) {
 			record(vars, key, name)
 		}
 	}
+}
+
+// existingEnvContent preserves committed templates as the authoritative base
+// for generated env files. This keeps safe defaults such as booleans, integer
+// ports, and disabled integrations from becoming invalid empty assignments.
+func existingEnvContent(dir string) string {
+	for _, name := range []string{".env.example", ".env.sample", ".env.template", ".env.local.example"} {
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err == nil && strings.TrimSpace(string(data)) != "" {
+			return string(data)
+		}
+	}
+	return ""
 }
 
 func contains(haystack []string, needle string) bool {

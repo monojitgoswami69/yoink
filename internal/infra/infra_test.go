@@ -109,3 +109,19 @@ func TestEnrichEnvContentEmptyExisting(t *testing.T) {
 		t.Errorf("expected REDIS_URL set, got:\n%s", out)
 	}
 }
+
+func TestReplaceEnvValuesPreservesCommentsAndUnrelatedKeys(t *testing.T) {
+	got := ReplaceEnvValues("# API\nAPI_URL=http://localhost:8000\nOTHER=value\n", map[string]string{"API_URL": "http://service-2:8000"})
+	want := "# API\nAPI_URL=http://service-2:8000\nOTHER=value\n"
+	if got != want {
+		t.Fatalf("replacement mismatch:\nwant %q\n got %q", want, got)
+	}
+}
+
+func TestClearGeneratedConnectionPlaceholders(t *testing.T) {
+	got := ClearGeneratedConnectionPlaceholders("DATABASE_URL=postgresql://user:pass@db:5432/app\nCUSTOM_URL=postgresql://real.example/db\n")
+	want := "DATABASE_URL=\nCUSTOM_URL=postgresql://real.example/db\n"
+	if got != want {
+		t.Fatalf("placeholder clearing mismatch:\nwant %q\n got %q", want, got)
+	}
+}

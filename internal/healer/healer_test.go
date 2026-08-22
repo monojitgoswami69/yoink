@@ -1,9 +1,12 @@
 package healer
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"yoink/internal/detector"
 	"yoink/internal/generator"
 )
 
@@ -16,6 +19,21 @@ func TestNonEmptyFallback(t *testing.T) {
 	}
 	if got := nonEmpty("real", "default"); got != "real" {
 		t.Errorf("expected real value, got %q", got)
+	}
+}
+
+func TestApplyPatchesRejectsEscapedPath(t *testing.T) {
+	dir := t.TempDir()
+	l := &Loop{
+		Output:    &generator.Output{Files: map[string]string{"Dockerfile.service-1": "FROM alpine\n"}},
+		Services:  []detector.Service{{ID: "service-1"}},
+		OutputDir: dir,
+	}
+	if _, _, err := l.applyPatches([]Change{{File: "../escape", Operation: "create_file", Content: "bad"}}, "service-1"); err == nil {
+		t.Fatal("escaped path should be rejected")
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "escape")); err == nil {
+		t.Fatal("escaped path was written")
 	}
 }
 

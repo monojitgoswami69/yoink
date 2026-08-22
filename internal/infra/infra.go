@@ -104,7 +104,10 @@ func Infer(results []envvar.Result) *Inference {
 			svc.Provider = prov.Provider
 			svc.Mode = "external"
 			svc.Reason = prov.Reason
-			link := AppLink{ServiceName: svc.Name, EnvVars: buildAppEnv(kind, *svc)}
+			// External providers must never receive local connection strings. Keep
+			// the link for graph/explain purposes, but preserve the repository's
+			// own provider configuration unchanged.
+			link := AppLink{ServiceName: svc.Name}
 			out.Links[r.ServiceID] = append(out.Links[r.ServiceID], link)
 		}
 
@@ -117,7 +120,7 @@ func Infer(results []envvar.Result) *Inference {
 			svc := bag.ensurePtr(rule.kind)
 			// Don't downgrade an external provider to local.
 			if svc.Mode == "external" {
-				link := AppLink{ServiceName: svc.Name, EnvVars: buildAppEnv(rule.kind, *svc)}
+				link := AppLink{ServiceName: svc.Name}
 				out.Links[r.ServiceID] = appendIfNew(out.Links[r.ServiceID], link)
 				continue
 			}
@@ -134,7 +137,7 @@ func Infer(results []envvar.Result) *Inference {
 			}
 			svc := bag.ensurePtr(rule.kind)
 			if svc.Mode == "external" {
-				link := AppLink{ServiceName: svc.Name, EnvVars: buildAppEnv(rule.kind, *svc)}
+				link := AppLink{ServiceName: svc.Name}
 				appendIfNew(out.Links[r.ServiceID], link)
 				continue
 			}
@@ -317,6 +320,58 @@ func EnrichEnvContent(existing string, env map[string]string) string {
 		b.WriteByte('=')
 		b.WriteString(env[k])
 		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+// ReplaceEnvValues updates explicit environment assignments without changing
+// comments or unrelated keys. It is used for app-to-app internal URLs, where
+// a generated Docker DNS value must win over a localhost build placeholder.
+func ReplaceEnvValues(existing string, replacements map[string]string) string {
+	if existing == "" || len(replacements) == 0 {
+		return existing
+	}
+	var b strings.Builder
+	for i, line := range strings.Split(existing, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			if key, _, ok := strings.Cut(trimmed, "="); ok {
+				key = strings.TrimSpace(key)
+				if value, found := replacements[key]; found {
+					line = key + "=" + value
+				}
+			}
+		}
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+// ClearGeneratedConnectionPlaceholders removes only the framework defaults that
+// Yoink itself seeded. Repository-provided provider URLs remain untouched.
+func ClearGeneratedConnectionPlaceholders(existing string) string {
+	placeholders := map[string]bool{
+		"postgresql://user:pass@db:5432/app": true,
+		"postgres://user:pass@db:5432/app":   true,
+		"mysql://app:app@db:3306/app":        true,
+		"redis://redis:6379/0":               true,
+		"mongodb://mongo:27017/app":          true,
+	}
+	var b strings.Builder
+	for i, line := range strings.Split(existing, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" && !strings.HasPrefix(trimmed, "#") {
+			if key, value, ok := strings.Cut(trimmed, "="); ok && placeholders[strings.TrimSpace(value)] {
+				line = strings.TrimSpace(key) + "="
+			}
+		}
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(line)
 	}
 	return b.String()
 }

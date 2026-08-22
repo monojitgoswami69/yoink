@@ -31,6 +31,9 @@ type Options struct {
 	// nil a port-probing allocator is used. Tests can supply a deterministic
 	// stub.
 	PortFn func(preferred int) int
+	// AppLinks maps an app service ID to other app service IDs it depends on.
+	// Callers populate this only from unambiguous graph evidence.
+	AppLinks map[string][]string
 }
 
 func (o *Options) outputSubdir() string {
@@ -67,7 +70,7 @@ func renderCompose(services []detector.Service, opts Options) string {
 
 	// Application services first.
 	for _, svc := range services {
-		writeAppService(&b, svc, project, net, subdir, pickPort, opts.Links[svc.ID], opts.Infra)
+		writeAppService(&b, svc, project, net, subdir, pickPort, opts.Links[svc.ID], opts.Infra, opts.AppLinks[svc.ID])
 	}
 
 	// Backing services (databases, caches, queues) come last so a casual
@@ -93,7 +96,7 @@ func renderCompose(services []detector.Service, opts Options) string {
 	return b.String()
 }
 
-func writeAppService(b *strings.Builder, svc detector.Service, project, net, subdir string, pickPort func(int) int, links []infra.AppLink, infraSvcs []infra.Service) {
+func writeAppService(b *strings.Builder, svc detector.Service, project, net, subdir string, pickPort func(int) int, links []infra.AppLink, infraSvcs []infra.Service, appLinks []string) {
 	name := safeServiceName(svc.ID)
 	port := svc.Port
 	if port == 0 {
@@ -129,11 +132,18 @@ func writeAppService(b *strings.Builder, svc detector.Service, project, net, sub
 		}
 	}
 
-	if len(validLinks) > 0 {
+	if len(validLinks) > 0 || len(appLinks) > 0 {
 		b.WriteString("    depends_on:\n")
 		for _, link := range validLinks {
 			fmt.Fprintf(b, "      %s:\n", link.ServiceName)
 			b.WriteString("        condition: service_healthy\n")
+		}
+		for _, app := range appLinks {
+			if app == "" || app == svc.ID {
+				continue
+			}
+			fmt.Fprintf(b, "      %s:\n", safeServiceName(app))
+			b.WriteString("        condition: service_started\n")
 		}
 	}
 

@@ -44,6 +44,7 @@ import (
 	"yoink/internal/generator"
 	"yoink/internal/healer"
 	"yoink/internal/llm"
+	"yoink/internal/safefs"
 	"yoink/internal/state"
 )
 
@@ -100,6 +101,7 @@ type AgentState struct {
 	BytesRead int
 	// Builds run so far.
 	BuildsRun int
+	ToolCalls int
 	// Start time.
 	StartedAt time.Time
 	// Tee for progress output.
@@ -193,7 +195,7 @@ func (a *Agent) RunHealLoop(ctx context.Context, buildOut string, maxTries int) 
 	res := &healer.Result{}
 
 	// Parse the initial failure.
-	failure := healer.AnalyzeFailure(buildOut, "")
+	failure := healer.AnalyzeFailure(buildOut, docker.ExtractFailedService(buildOut))
 	a.State.CurrentFailure = &failure
 	a.log(fmt.Sprintf("→ Agent analyzing failure: %s (%s)", failure.Category, failure.Progression))
 
@@ -268,7 +270,7 @@ func (a *Agent) RunHealLoop(ctx context.Context, buildOut string, maxTries int) 
 	}
 
 	// Build failed — determine the final state (SUCCESS vs CONFIGURATION_REQUIRED vs BLOCKED).
-	finalFailure := healer.AnalyzeFailure(buildOut2, "")
+	finalFailure := healer.AnalyzeFailure(buildOut2, docker.ExtractFailedService(buildOut2))
 	a.State.CurrentFailure = &finalFailure
 	res.FinalOutput = finalFailure.Error
 
@@ -519,30 +521,46 @@ func (a *Agent) agentIteration(ctx context.Context) (bool, error) {
 	// Build the structured context for the LLM — including relevant files
 	// selected by the existing selectRelevantFiles logic.
 	userPrompt := a.buildContextPrompt()
-
-	// Call the LLM (bounded retry on transient provider errors — 503,
-	// timeout, connection — so a momentary load spike doesn't abort the
-	// heal loop). Non-transient errors fail fast.
-	raw, err := a.callLLMWithRetry(ctx, agentSystemPrompt, userPrompt)
-	if err != nil {
-		return false, err
-	}
-
-	// Parse the response.
-	jsonStr := llm.ExtractJSON(raw)
 	var resp agentResponse
-	if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
-		return false, fmt.Errorf("agent response not parseable: %w\nlast: %s", err, truncate(raw, 400))
-	}
+	for round := 0; round < 3; round++ {
+		// Call the LLM (bounded retry on transient provider errors — 503,
+		// timeout, connection — so a momentary load spike doesn't abort the
+		// heal loop). Non-transient errors fail fast.
+		raw, err := a.callLLMWithRetry(ctx, agentSystemPrompt, userPrompt)
+		if err != nil {
+			return false, err
+		}
 
-	// Handle tool calls (the agent wants to inspect files before patching).
-	for _, tc := range resp.ToolCalls {
-		if a.State.BytesRead >= a.State.Budget.MaxBytesRead {
-			a.log("  ↳ read budget exhausted")
+		jsonStr := llm.ExtractJSON(raw)
+		resp = agentResponse{}
+		if err := json.Unmarshal([]byte(jsonStr), &resp); err != nil {
+			return false, fmt.Errorf("agent response not parseable: %w\nlast: %s", err, truncate(raw, 400))
+		}
+
+		if len(resp.ToolCalls) == 0 {
 			break
 		}
-		result := a.executeToolCall(ctx, tc)
-		_ = result // fed back in the next iteration
+		var toolResults strings.Builder
+		for _, tc := range resp.ToolCalls {
+			if a.State.ToolCalls >= a.State.Budget.MaxToolCalls {
+				a.log("  ↳ tool-call budget exhausted")
+				break
+			}
+			if a.State.BytesRead >= a.State.Budget.MaxBytesRead && tc.Tool == "read_file" {
+				a.log("  ↳ read budget exhausted")
+				break
+			}
+			a.State.ToolCalls++
+			result := a.executeToolCall(ctx, tc)
+			fmt.Fprintf(&toolResults, "\n\nTOOL RESULT (%s):\n%s", tc.Tool, result)
+		}
+		if toolResults.Len() == 0 || round == 2 {
+			break
+		}
+		// The provider interface is intentionally small and stateless. Append
+		// tool results to the next bounded call so the model can reason from
+		// the evidence it just requested instead of receiving decorative tools.
+		userPrompt += toolResults.String() + "\n\nNow continue the diagnosis. Do not repeat a tool request whose result is already shown."
 	}
 
 	// Handle patch proposals.
@@ -557,22 +575,47 @@ func (a *Agent) agentIteration(ctx context.Context) (bool, error) {
 	// Handle full-file replacement fallback.
 	if resp.Dockerfile != "" || resp.Compose != "" {
 		a.log("  ↳ agent returned full-file replacement (fallback)")
-		// Write via the existing applyFix path — invariant-checked.
-		fix := &llm.BuildFixResponse{
-			Service: resp.Service, Dockerfile: resp.Dockerfile, Compose: resp.Compose,
-			Summary: resp.Summary,
+		if resp.Dockerfile != "" {
+			service := resp.Service
+			if service == "" {
+				service = a.resolveService()
+			}
+			dfKey := "Dockerfile." + service
+			if !a.validGeneratedPath(dfKey) {
+				a.log("  ↳ rejected Dockerfile replacement path: " + dfKey)
+				return false, nil
+			}
+			original := a.State.Generated.Files[dfKey]
+			cleaned := llm.CleanContent(resp.Dockerfile)
+			violations := healer.CheckInvariants([]healer.Change{{File: dfKey, Operation: "create_file", Content: cleaned}}, map[string]string{dfKey: original})
+			if healer.HasRejections(violations) {
+				a.log("  ↳ rejected by invariants:\n" + healer.FormatViolations(violations))
+				return false, nil
+			}
+			a.State.Generated.Files[dfKey] = cleaned
+			if err := os.WriteFile(filepath.Join(a.State.OutputDir, dfKey), []byte(cleaned), 0644); err != nil {
+				return false, err
+			}
+			a.log(fmt.Sprintf("  ↳ applied Dockerfile: %s", resp.Summary))
 		}
-		dfKey := "Dockerfile." + a.resolveService()
-		original := a.State.Generated.Files[dfKey]
-		cleaned := llm.CleanContent(fix.Dockerfile)
-		violations := healer.CheckInvariants([]healer.Change{{File: dfKey, Operation: "create_file", Content: cleaned}}, map[string]string{dfKey: original})
-		if healer.HasRejections(violations) {
-			a.log("  ↳ rejected by invariants:\n" + healer.FormatViolations(violations))
-			return false, nil
+		if resp.Compose != "" {
+			cleaned := llm.CleanContent(resp.Compose)
+			if err := llm.AssertComposeLayout(cleaned); err != nil {
+				a.log("  ↳ rejected compose replacement: " + err.Error())
+				return false, nil
+			}
+			original := a.State.Generated.Files["docker-compose.yml"]
+			violations := healer.CheckInvariants([]healer.Change{{File: "docker-compose.yml", Operation: "create_file", Content: cleaned}}, map[string]string{"docker-compose.yml": original})
+			if healer.HasRejections(violations) {
+				a.log("  ↳ rejected compose by invariants:\n" + healer.FormatViolations(violations))
+				return false, nil
+			}
+			a.State.Generated.Files["docker-compose.yml"] = cleaned
+			if err := os.WriteFile(filepath.Join(a.State.OutputDir, "docker-compose.yml"), []byte(cleaned), 0644); err != nil {
+				return false, err
+			}
+			a.log(fmt.Sprintf("  ↳ applied compose: %s", resp.Summary))
 		}
-		a.State.Generated.Files[dfKey] = cleaned
-		_ = os.WriteFile(filepath.Join(a.State.OutputDir, dfKey), []byte(cleaned), 0644)
-		a.log(fmt.Sprintf("  ↳ applied: %s", resp.Summary))
 		return false, nil
 	}
 
@@ -639,12 +682,13 @@ func (a *Agent) executeToolCall(ctx context.Context, tc toolCallReq) string {
 // --- Tool implementations ---
 
 func (a *Agent) toolReadFile(path string, offset, limit int) string {
-	fullPath := filepath.Join(a.State.RepoRoot, path)
-	data, err := os.ReadFile(fullPath)
+	if a.Reader == nil {
+		return fmt.Sprintf("[error reading %s: repository reader unavailable]", path)
+	}
+	content, err := a.Reader(path)
 	if err != nil {
 		return fmt.Sprintf("[error reading %s: %v]", path, err)
 	}
-	content := string(data)
 	// Apply offset/limit for bounded reads.
 	if offset > 0 {
 		lines := strings.Split(content, "\n")
@@ -679,7 +723,18 @@ func (a *Agent) toolReadFile(path string, offset, limit int) string {
 func (a *Agent) toolSearch(pattern, path string) string {
 	searchDir := a.State.RepoRoot
 	if path != "" {
-		searchDir = filepath.Join(a.State.RepoRoot, path)
+		if a.Reader == nil {
+			return "[error searching: repository reader unavailable]"
+		}
+		root, err := safefs.New(a.State.RepoRoot)
+		if err != nil {
+			return fmt.Sprintf("[error searching %s: %v]", path, err)
+		}
+		resolved, err := root.Resolve(path)
+		if err != nil {
+			return fmt.Sprintf("[error searching %s: %v]", path, err)
+		}
+		searchDir = resolved
 	}
 	var matches []string
 	_ = filepath.WalkDir(searchDir, func(p string, d fs.DirEntry, err error) error {
@@ -707,7 +762,15 @@ func (a *Agent) toolSearch(pattern, path string) string {
 func (a *Agent) toolListTree(path string, depth int) string {
 	searchDir := a.State.RepoRoot
 	if path != "" {
-		searchDir = filepath.Join(a.State.RepoRoot, path)
+		root, err := safefs.New(a.State.RepoRoot)
+		if err != nil {
+			return fmt.Sprintf("[error listing %s: %v]", path, err)
+		}
+		resolved, err := root.Resolve(path)
+		if err != nil {
+			return fmt.Sprintf("[error listing %s: %v]", path, err)
+		}
+		searchDir = resolved
 	}
 	var b strings.Builder
 	_ = filepath.WalkDir(searchDir, func(p string, d fs.DirEntry, err error) error {
@@ -753,7 +816,7 @@ func (a *Agent) toolBuild(ctx context.Context) string {
 	out, err := a.Compose.Build(ctx)
 	a.State.BuildsRun++
 	if err != nil {
-		f := healer.AnalyzeFailure(out, "")
+		f := healer.AnalyzeFailure(out, docker.ExtractFailedService(out))
 		a.State.CurrentFailure = &f
 		a.State.PrevFailure = &f
 		return fmt.Sprintf("BUILD FAILED\n%s", f.RelevantLog)
@@ -795,6 +858,10 @@ func (a *Agent) applyAgentPatches(changes []healer.Change) bool {
 	normalized := make([]healer.Change, len(changes))
 	for i, c := range changes {
 		file := strings.TrimPrefix(c.File, "yoink-outputs/")
+		if !a.validGeneratedPath(file) {
+			a.log("  ↳ rejected patch path: " + c.File)
+			return false
+		}
 		normalized[i] = c
 		normalized[i].File = file
 		normalized[i].Operation = normalizePatchOp(c.Operation)
@@ -825,10 +892,9 @@ func (a *Agent) applyAgentPatches(changes []healer.Change) bool {
 		return false
 	}
 	// Apply each patch.
-	applied := false
+	patchedFiles := make(map[string]string, len(changes))
 	for _, change := range changes {
 		file := change.File
-		diskPath := filepath.Join(a.State.OutputDir, file)
 		original := originals[file]
 		if original == "" {
 			original = a.State.Generated.Files[file]
@@ -836,11 +902,25 @@ func (a *Agent) applyAgentPatches(changes []healer.Change) bool {
 		patched, err := healer.ApplyPatch(original, change)
 		if err != nil {
 			a.log(fmt.Sprintf("  ↳ patch failed for %s: %v", file, err))
-			continue
+			return false
 		}
 		cleaned := llm.CleanContent(patched)
+		patchedFiles[file] = cleaned
+	}
+	applied := false
+	for _, change := range changes {
+		file := change.File
+		original := originals[file]
+		if original == "" {
+			original = a.State.Generated.Files[file]
+		}
+		cleaned := patchedFiles[file]
+		diskPath := filepath.Join(a.State.OutputDir, file)
+		if err := os.WriteFile(diskPath, []byte(cleaned), 0644); err != nil {
+			a.log(fmt.Sprintf("  ↳ patch write failed for %s: %v", file, err))
+			return false
+		}
 		a.State.Generated.Files[file] = cleaned
-		_ = os.WriteFile(diskPath, []byte(cleaned), 0644)
 		applied = true
 		a.State.Patches = append(a.State.Patches, PatchRecord{
 			File: file, Operation: change.Operation, Reason: change.Reason, Timestamp: time.Now(),
@@ -883,6 +963,10 @@ func (a *Agent) resolveService() string {
 
 func (a *Agent) applyDockerfileFix(fixed, summary string) {
 	dfKey := "Dockerfile." + a.resolveService()
+	if !a.validGeneratedPath(dfKey) {
+		a.log("  ↳ rejected deterministic fix path: " + dfKey)
+		return
+	}
 	cleaned := llm.CleanContent(fixed)
 	a.State.Generated.Files[dfKey] = cleaned
 	_ = os.WriteFile(filepath.Join(a.State.OutputDir, dfKey), []byte(cleaned), 0644)
@@ -894,6 +978,30 @@ func (a *Agent) applyDockerfileFix(fixed, summary string) {
 	}
 }
 
+// validGeneratedPath prevents model-controlled paths from escaping the
+// generated output directory or mutating unrelated files. Generated artifacts
+// are the only files the agent is allowed to change.
+func (a *Agent) validGeneratedPath(file string) bool {
+	if file == "" || filepath.IsAbs(file) {
+		return false
+	}
+	clean := filepath.Clean(file)
+	if clean != file || clean == "." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) || clean == ".." {
+		return false
+	}
+	if clean == "docker-compose.yml" {
+		return true
+	}
+	if strings.HasPrefix(clean, "Dockerfile.") {
+		for _, svc := range a.State.Services {
+			if clean == "Dockerfile."+svc.ID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (a *Agent) rebuildAndCheck(ctx context.Context, res *healer.Result) bool {
 	buildOut, buildErr := a.Compose.Build(ctx)
 	a.State.BuildsRun++
@@ -903,7 +1011,7 @@ func (a *Agent) rebuildAndCheck(ctx context.Context, res *healer.Result) bool {
 
 	if buildErr != nil {
 		// Build failed — analyze the new failure.
-		newFailure := healer.AnalyzeFailure(buildOut, "")
+		newFailure := healer.AnalyzeFailure(buildOut, docker.ExtractFailedService(buildOut))
 		newFailure.Progression = healer.ClassifyProgression(&newFailure, a.State.PrevFailure)
 		a.State.CurrentFailure = &newFailure
 		a.State.PrevFailure = &newFailure
@@ -978,6 +1086,14 @@ func (a *Agent) buildContextPrompt() string {
 	// Service metadata.
 	if len(a.State.Services) > 0 {
 		svc := a.State.Services[0]
+		if selected := a.resolveService(); selected != "" {
+			for _, candidate := range a.State.Services {
+				if candidate.ID == selected {
+					svc = candidate
+					break
+				}
+			}
+		}
 		fmt.Fprintf(&b, "SERVICE: %s\nFramework: %s\nLanguage: %s\nPM: %s\nPort: %d\n", svc.ID, svc.Framework, svc.Language, svc.PackageManager, svc.Port)
 		if len(svc.Evidence) > 0 {
 			b.WriteString("\nDETECTION EVIDENCE:\n")

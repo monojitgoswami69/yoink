@@ -41,7 +41,11 @@ func Execute() {
 
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, ui.ErrorLine(err.Error()))
-		os.Exit(1)
+		code := 1
+		if coded, ok := err.(interface{ ExitCode() int }); ok {
+			code = coded.ExitCode()
+		}
+		os.Exit(code)
 	}
 }
 

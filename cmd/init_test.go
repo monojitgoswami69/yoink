@@ -1,6 +1,8 @@
 package cmd
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 
@@ -145,5 +147,33 @@ func TestExtractPortMapIgnoresDependsOnDashLines(t *testing.T) {
 	got := extractPortMap(compose, []detector.Service{{ID: "service-1"}})
 	if got["service-1"] != 9000 {
 		t.Errorf("expected 9000, got %d", got["service-1"])
+	}
+}
+
+func TestInitStateErrorExitCodes(t *testing.T) {
+	tests := []struct {
+		state string
+		want  int
+	}{
+		{"configuration_required", 2},
+		{"blocked", 3},
+		{"failed", 4},
+	}
+	for _, tc := range tests {
+		err := initStateError{state: tc.state}
+		if got := err.ExitCode(); got != tc.want {
+			t.Errorf("%s exit code: want %d, got %d", tc.state, tc.want, got)
+		}
+	}
+}
+
+func TestExistingDockerConfig(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "compose.yaml"), []byte("services: {}\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	got := existingDockerConfig(root)
+	if len(got) != 1 || got[0] != "compose.yaml" {
+		t.Fatalf("existing Docker config: got %v", got)
 	}
 }

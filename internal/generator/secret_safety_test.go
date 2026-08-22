@@ -84,3 +84,21 @@ func TestIsSecretEnvVar(t *testing.T) {
 		}
 	}
 }
+
+func TestURLBuildEnvUsesParseablePlaceholder(t *testing.T) {
+	svc := detector.Service{BuildEnv: map[string]string{"UPSTASH_REDIS_REST_URL": ""}}
+	var b strings.Builder
+	writeBuildEnv(&b, svc)
+	if !strings.Contains(b.String(), "ENV UPSTASH_REDIS_REST_URL=http://yoink-build-placeholder.invalid") {
+		t.Fatalf("URL env should use a parseable placeholder: %s", b.String())
+	}
+}
+
+func TestBuildEnvQuotesDockerValuesWithSpaces(t *testing.T) {
+	svc := detector.Service{BuildEnv: map[string]string{"SEED_ADMIN_NAME": "Siksha Saathi Administrator"}}
+	var b strings.Builder
+	writeBuildEnv(&b, svc)
+	if !strings.Contains(b.String(), `ENV SEED_ADMIN_NAME="Siksha Saathi Administrator"`) {
+		t.Fatalf("space-containing ENV value was not quoted: %s", b.String())
+	}
+}

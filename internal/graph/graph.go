@@ -93,6 +93,50 @@ type ServiceGraph struct {
 	Edges []Edge
 }
 
+// AppLinks returns unambiguous app-to-app dependencies keyed by source app.
+// The graph builder is the sole authority for these relationships; callers
+// should not infer dependencies from arbitrary environment names themselves.
+func (g *ServiceGraph) AppLinks() map[string][]string {
+	out := map[string][]string{}
+	for _, e := range g.Edges {
+		if e.Kind != EdgeEnvBinding || e.To == "" {
+			continue
+		}
+		seen := false
+		for _, existing := range out[e.From] {
+			if existing == e.To {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out[e.From] = append(out[e.From], e.To)
+		}
+	}
+	return out
+}
+
+// InternalBindings returns server-side app URL replacements. Browser-facing
+// frontend variables are intentionally excluded because browsers cannot
+// resolve Compose service DNS names.
+func (g *ServiceGraph) InternalBindings(services []detector.Service) map[string]map[string]string {
+	types := map[string]string{}
+	for _, s := range services {
+		types[s.ID] = s.Type
+	}
+	out := map[string]map[string]string{}
+	for _, e := range g.Edges {
+		if e.Kind != EdgeEnvBinding || e.EnvVar == "" || e.InternalURL == "" || types[e.From] != "backend" {
+			continue
+		}
+		if out[e.From] == nil {
+			out[e.From] = map[string]string{}
+		}
+		out[e.From][e.EnvVar] = e.InternalURL
+	}
+	return out
+}
+
 // Find returns the node with the given id, or nil.
 func (g *ServiceGraph) Find(id string) *Node {
 	for i := range g.Nodes {

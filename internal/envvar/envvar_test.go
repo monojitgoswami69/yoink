@@ -121,6 +121,20 @@ func TestDeterministicOrdering(t *testing.T) {
 	}
 }
 
+func TestDetectPreservesExistingEnvTemplateValues(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".env.example"), []byte("TWILIO_ENABLED=false\nSMTP_PORT=587\nSECRET_KEY=\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "app.py"), []byte("import os\nos.getenv('TWILIO_ENABLED')\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	results := Detect(root, []detector.Service{{ID: "service-1", Directory: "", Language: "python", Framework: "fastapi", Type: "backend"}})
+	if len(results) != 1 || !strings.Contains(results[0].EnvContent, "TWILIO_ENABLED=false") || !strings.Contains(results[0].EnvContent, "SMTP_PORT=587") {
+		t.Fatalf("existing template values were not preserved: %+v", results)
+	}
+}
+
 func TestCommonVarsDoNotDuplicate(t *testing.T) {
 	out := GenerateEnvExample([]EnvVar{{Name: "DATABASE_URL"}}, "fastapi")
 	if c := strings.Count(out, "DATABASE_URL="); c != 1 {
