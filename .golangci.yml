@@ -1,0 +1,17 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+  exclusions:
+    rules:
+      # Test setup routinely ignores os.WriteFile/os.MkdirAll error returns;
+      # enforcing errcheck there buries the test's intent under boilerplate.
+      - path: _test\.go
+        linters:
+          - errcheck
