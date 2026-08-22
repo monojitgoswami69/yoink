@@ -464,10 +464,28 @@ func writeBuildEnv(b *strings.Builder, svc detector.Service) {
 	for _, k := range keys {
 		v := svc.BuildEnv[k]
 		if isSecretEnvVar(k) || strings.TrimSpace(v) == "" {
-			v = "yoink-build-placeholder"
+			v = buildPlaceholder(k)
 		}
-		fmt.Fprintf(b, "ENV %s=%s\n", k, v)
+		fmt.Fprintf(b, "ENV %s=%s\n", k, dockerEnvValue(v))
 	}
+}
+
+func dockerEnvValue(value string) string {
+	if strings.ContainsAny(value, " \t#\"") {
+		return fmt.Sprintf("%q", value)
+	}
+	return value
+}
+
+// buildPlaceholder keeps build-time validation deterministic without inventing
+// credentials. URL-shaped configuration needs a parseable value because some
+// applications construct clients during module evaluation.
+func buildPlaceholder(name string) string {
+	upper := strings.ToUpper(name)
+	if strings.Contains(upper, "URL") || strings.Contains(upper, "URI") || strings.Contains(upper, "ENDPOINT") {
+		return "http://yoink-build-placeholder.invalid"
+	}
+	return "yoink-build-placeholder"
 }
 
 // isSecretEnvVar reports whether the variable name looks like a secret that

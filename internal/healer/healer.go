@@ -377,6 +377,18 @@ func (l *Loop) Run(ctx context.Context) (*Result, error) {
 // patch-based path that replaces full-file replacement when the LLM returns
 // a RepairPlan with changes. Returns (applied, changedFiles, error).
 func (l *Loop) applyPatches(changes []Change, failingService string) (bool, []string, error) {
+	// Normalize and validate every path before reading or mutating anything.
+	// The LLM may use compose-relative yoink-outputs/ paths, but it may only
+	// modify artifacts already owned by this generated output.
+	normalized := make([]Change, len(changes))
+	for i, change := range changes {
+		change.File = strings.TrimPrefix(change.File, "yoink-outputs/")
+		if !validGeneratedPath(change.File, l.Services, l.Output) {
+			return false, nil, fmt.Errorf("repair path is outside generated artifacts: %s", change.File)
+		}
+		normalized[i] = change
+	}
+	changes = normalized
 	// Invariant check: reject plans that weaken validation.
 	originals := map[string]string{}
 	for _, c := range changes {
@@ -474,6 +486,9 @@ func (l *Loop) applyFix(fix *llm.BuildFixResponse, failingService string) (bool,
 				}
 			}
 		}
+		if !validGeneratedPath(filename, l.Services, l.Output) {
+			return false, fmt.Errorf("repair path is outside generated artifacts: %s", filename)
+		}
 		cleaned := llm.CleanContent(fix.Dockerfile)
 		original := l.Output.Files[filename]
 
@@ -523,6 +538,25 @@ func (l *Loop) applyFix(fix *llm.BuildFixResponse, failingService string) (bool,
 	}
 
 	return wrote, nil
+}
+
+func validGeneratedPath(file string, services []detector.Service, output *generator.Output) bool {
+	if file == "" || filepath.IsAbs(file) {
+		return false
+	}
+	clean := filepath.Clean(file)
+	if clean != file || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return false
+	}
+	if clean == "docker-compose.yml" {
+		return output != nil && output.Files != nil
+	}
+	for _, svc := range services {
+		if clean == "Dockerfile."+svc.ID {
+			return output != nil && output.Files != nil
+		}
+	}
+	return false
 }
 
 func (l *Loop) dockerfileForService(service string) string {
@@ -825,8 +859,9 @@ func fixMonorepoSubPackageDeps(errorTail, dockerfile string) (string, string, bo
 		//    stage (the static template only copies the root's).
 		pkgCopy := "COPY " + subdir + "/package*.json ./" + subdir + "/"
 		if !strings.Contains(newDF, pkgCopy) {
-			// Insert before the npm ci line.
-			npmLine := "npm ci --no-audit --no-fund"
+			// Insert before the complete RUN instruction. Inserting inside the
+			// command creates invalid Dockerfile syntax such as `RUN COPY ...`.
+			npmLine := "RUN npm ci --no-audit --no-fund"
 			newDF = strings.Replace(newDF, npmLine, pkgCopy+"\n"+npmLine, 1)
 		}
 		// 1. Add cd <subdir> && npm ci to the deps stage.

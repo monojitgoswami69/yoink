@@ -137,6 +137,25 @@ func TestGraphAppAppEnvBindingUnambiguous(t *testing.T) {
 	}
 }
 
+func TestGraphAppLinksAndInternalBindings(t *testing.T) {
+	svcs := []detector.Service{
+		app("frontend", "vite", "typescript", "frontend", 3000, map[string]string{"API_URL": "http://backend:8000"}),
+		app("backend", "fastapi", "python", "backend", 8000, map[string]string{"UPSTREAM_URL": "http://frontend:3000"}),
+	}
+	g := Build(svcs, nil, nil, map[string]int{"frontend": 3001, "backend": 8001})
+	links := g.AppLinks()
+	if len(links["frontend"]) != 1 || links["frontend"][0] != "backend" {
+		t.Fatalf("expected frontend -> backend app link, got %+v", links)
+	}
+	internal := g.InternalBindings(svcs)
+	if got := internal["backend"]["UPSTREAM_URL"]; got != "http://frontend:3000" {
+		t.Fatalf("backend internal binding: got %q", got)
+	}
+	if len(internal["frontend"]) != 0 {
+		t.Fatalf("frontend browser binding must not be rewritten to Docker DNS: %+v", internal)
+	}
+}
+
 func TestGraphStartOrderInfraFirst(t *testing.T) {
 	g := Build(
 		[]detector.Service{

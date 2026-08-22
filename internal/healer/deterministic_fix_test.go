@@ -60,3 +60,18 @@ func TestDeterministicNoFixWhenNoPythonFrom(t *testing.T) {
 		t.Fatal("should not fix a non-python Dockerfile")
 	}
 }
+
+func TestMonorepoFixKeepsDockerfileInstructionsValid(t *testing.T) {
+	errorTail := "ingestion-worker/src/index.ts(1,1): error TS2307: Cannot find module 'pg'"
+	dockerfile := "FROM node:20-alpine AS deps\nWORKDIR /app\nCOPY package*.json ./\nRUN npm ci --no-audit --no-fund\n"
+	fixed, _, ok := fixMonorepoSubPackageDeps(errorTail, dockerfile)
+	if !ok {
+		t.Fatal("expected monorepo dependency fix")
+	}
+	if strings.Contains(fixed, "RUN COPY") || strings.Contains(fixed, "\nNPM CI") {
+		t.Fatalf("fix produced malformed Dockerfile:\n%s", fixed)
+	}
+	if !strings.Contains(fixed, "COPY ingestion-worker/package*.json ./ingestion-worker/") || !strings.Contains(fixed, "RUN npm ci --no-audit --no-fund && cd ingestion-worker && npm ci --no-audit --no-fund") {
+		t.Fatalf("fix missing expected dependency instructions:\n%s", fixed)
+	}
+}

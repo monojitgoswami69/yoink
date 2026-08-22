@@ -153,6 +153,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 				healRes, healErr := loop.Run(ctx)
 				if healErr == nil && healRes.Success {
 					io.success("Heal succeeded — build is green")
+					buildErr = nil
 				} else if healRes != nil {
 					io.warn(fmt.Sprintf("Heal: %d attempts, success=%v", len(healRes.Attempts), healRes.Success))
 					if healRes.FinalOutput != "" {

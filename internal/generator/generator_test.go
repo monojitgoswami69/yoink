@@ -59,6 +59,17 @@ func TestBuildEmitsDockerfilePerServiceAndCompose(t *testing.T) {
 	}
 }
 
+func TestComposeEmitsUnambiguousAppDependency(t *testing.T) {
+	services := []detector.Service{
+		{ID: "service-1", Framework: "next", Type: "frontend", Port: 3000, PackageManager: "npm", HasLockfile: true, BuildCmd: []string{"npm", "run", "build"}, StartCmd: []string{"npm", "start"}},
+		{ID: "service-2", Framework: "express", Type: "backend", Port: 8000, PackageManager: "npm", HasLockfile: true, StartCmd: []string{"npm", "start"}},
+	}
+	out := Build(services, Options{Repo: "app", AppLinks: map[string][]string{"service-1": {"service-2"}}, PortFn: func(p int) int { return p }})
+	if !strings.Contains(out.Files["docker-compose.yml"], "service-2:\n        condition: service_started") {
+		t.Fatalf("compose missing app dependency:\n%s", out.Files["docker-compose.yml"])
+	}
+}
+
 func TestDockerfileForNextInstallsCurlAndUsesRepoRootContext(t *testing.T) {
 	svc := detector.Service{ID: "s1", Directory: "apps/web", Framework: "next", PackageManager: "npm", Port: 3000, InstallCmd: []string{"npm", "ci"}, BuildCmd: []string{"npm", "run", "build"}, StartCmd: []string{"npm", "start"}}
 	df := renderDockerfile(svc)

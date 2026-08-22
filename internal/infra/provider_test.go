@@ -57,6 +57,9 @@ func TestExternalProviderNotProvisionedLocally(t *testing.T) {
 	if inf.Services[0].Mode != "external" {
 		t.Error("Neon dep should force external mode even with DATABASE_URL")
 	}
+	if links := inf.Links["s1"]; len(links) != 1 || len(links[0].EnvVars) != 0 {
+		t.Fatalf("external provider must not inject local env vars: %+v", links)
+	}
 }
 
 func TestProviderDedupWithGenericDeps(t *testing.T) {
