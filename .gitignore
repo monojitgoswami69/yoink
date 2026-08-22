@@ -1,0 +1,28 @@
+# Binaries
+yoink
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Directories
+vendor/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+build/
+dist/
+
+# Local environment / secrets (never commit real secrets)
+.env
+.env.local
+*.env
+!.env.example
+.yoink.env
+repos/
