@@ -48,8 +48,12 @@ func Resolve(name string) (*Project, error) {
 	if name == "" {
 		mgr = mgrs[0] // AllManagers returns most-recent-init first
 	} else {
+		// Match on the canonical id so "Sevatra" and "sevatra" resolve to
+		// the same project, including legacy state dirs created with mixed
+		// case before canonicalisation was introduced.
+		target := state.Canonicalize(name)
 		for _, m := range mgrs {
-			if m.Repo == name {
+			if state.Canonicalize(m.Repo) == target {
 				mgr = m
 				break
 			}
@@ -103,10 +107,12 @@ func fromManager(mgr *state.Manager, lock *state.Lock) *Project {
 	outputDir := filepath.Join(lock.RepoPath, lock.OutputSubdir)
 	composePath := filepath.Join(outputDir, "docker-compose.yml")
 	return &Project{
-		Name:      name,
-		Manager:   mgr,
-		Lock:      lock,
-		Compose:   docker.New(composePath, lock.RepoPath, "yoink-"+name),
+		Name:    name,
+		Manager: mgr,
+		Lock:    lock,
+		// Compose project name (container prefix) uses the canonical id so
+		// up/down/status agree regardless of the display name's casing.
+		Compose:   docker.New(composePath, lock.RepoPath, "yoink-"+state.Canonicalize(name)),
 		OutputDir: outputDir,
 	}
 }

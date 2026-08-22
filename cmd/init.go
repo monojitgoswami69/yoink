@@ -18,6 +18,7 @@ import (
 	"yoink/internal/generator"
 	"yoink/internal/git"
 	"yoink/internal/healer"
+	"yoink/internal/httpcheck"
 	"yoink/internal/infra"
 	"yoink/internal/llm"
 	"yoink/internal/portprobe"
@@ -48,6 +49,11 @@ URL forms accepted:
   https://github.com/<owner>/<repo>/tree/<branch>[/<subdir>]
   git@github.com:<owner>/<repo>[.git]
 
+Local repositories:
+  yoink init            # the current working directory
+  yoink init .          # the current working directory
+  yoink init <dir>      # a local directory (no clone performed)
+
 Flags:
   --force         Force re-initialisation even if the cloned directory exists
   --no-agent      Disable LLM validation (static analysis only)
@@ -55,10 +61,14 @@ Flags:
   --max-services  Cap on detected services
   --build         Run docker compose build + heal loop after generation (default: auto)
   --no-build      Skip the build/heal loop even when docker is available
-  --heal-tries    Maximum heal-loop attempts (default 3)`,
-	Args: cobra.ExactArgs(1),
+  --heal-tries    Maximum heal-loop attempts (default: 3)`,
+	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := runInit(cmd, args[0]); err != nil {
+		repo := ""
+		if len(args) > 0 {
+			repo = args[0]
+		}
+		if err := runInit(cmd, repo); err != nil {
 			fmt.Println()
 			fmt.Println(ui.ErrorBox.Render(fmt.Sprintf("Error: %s", err.Error())))
 			os.Exit(1)
@@ -101,7 +111,7 @@ func runInit(cmd *cobra.Command, repoURL string) error {
 		fmt.Print(ui.Header(ui.HeaderArgs{Command: "init", Version: Version}))
 	}
 
-	parsed, err := git.ParseURL(repoURL)
+	parsed, err := parseRepoRef(repoURL)
 	if err != nil {
 		return err
 	}
@@ -116,9 +126,16 @@ func runInit(cmd *cobra.Command, repoURL string) error {
 		return err
 	}
 
-	targetDir, err := prepareTargetDir(projectName, io)
-	if err != nil {
-		return err
+	// Local mode reuses the repository in place (no clone, no copy); remote
+	// mode materialises the repo under ~/.yoink/repos/<name>.
+	var targetDir string
+	if parsed.LocalPath != "" {
+		targetDir = parsed.LocalPath
+	} else {
+		targetDir, err = prepareTargetDir(projectName, io)
+		if err != nil {
+			return err
+		}
 	}
 
 	totalSteps := 7
@@ -127,12 +144,17 @@ func runInit(cmd *cobra.Command, repoURL string) error {
 		totalSteps = 8
 	}
 
-	// Step 1: clone.
-	io.step(1, totalSteps, "Clone repository")
-	if err := io.withSpinner(fmt.Sprintf("Cloning %s/%s...", parsed.Owner, parsed.Repo), func() error {
-		return git.Clone(ctx, parsed.Clone, targetDir, cfg.GitHubPAT)
-	}); err != nil {
-		return err
+	// Step 1: clone (remote) or load (local).
+	if parsed.LocalPath != "" {
+		io.step(1, totalSteps, "Load local repository")
+		io.success(fmt.Sprintf("Using %s", targetDir))
+	} else {
+		io.step(1, totalSteps, "Clone repository")
+		if err := io.withSpinner(fmt.Sprintf("Cloning %s/%s...", parsed.Owner, parsed.Repo), func() error {
+			return git.Clone(ctx, parsed.Clone, targetDir, cfg.GitHubPAT)
+		}); err != nil {
+			return err
+		}
 	}
 
 	// Agent construction needs the cloned tree (safefs roots the sandboxed
@@ -300,7 +322,7 @@ func runInit(cmd *cobra.Command, repoURL string) error {
 
 	// Persist state so `yoink up` / `dash` work later.
 	portMap := extractPortMap(out.Files["docker-compose.yml"], detection.Services)
-	if err := persistState(parsed, projectName, targetDir, initOutputDir, detection.Services, inference.Services, portMap); err != nil {
+	if err := persistState(parsed, projectName, targetDir, initOutputDir, detection.Services, inference.Services, inference.Links, portMap); err != nil {
 		io.warn(fmt.Sprintf("Could not persist state: %v", err))
 	}
 
@@ -321,7 +343,7 @@ func runInit(cmd *cobra.Command, repoURL string) error {
 	}
 
 	// Step 8 (optional): build/heal.
-	healResult, healErr := maybeRunHeal(ctx, doBuild, projectName, targetDir, outputDir, out, detection.Services, treeStr, ia, totalSteps, io)
+	healResult, healErr := maybeRunHeal(ctx, doBuild, projectName, targetDir, outputDir, out, detection.Services, treeStr, ia, totalSteps, portMap, io)
 	if healErr != nil {
 		io.warn(fmt.Sprintf("Build/heal aborted: %v", healErr))
 	}
@@ -385,14 +407,27 @@ func extractPortMap(compose string, services []detector.Service) map[string]int 
 	return portMap
 }
 
-func persistState(parsed *git.ParsedURL, projectName, targetDir, outputSubdir string, services []detector.Service, infraSvcs []infra.Service, portMap map[string]int) error {
+func persistState(parsed *git.ParsedURL, projectName, targetDir, outputSubdir string, services []detector.Service, infraSvcs []infra.Service, links map[string][]infra.AppLink, portMap map[string]int) error {
 	mgr, err := state.For(projectName)
 	if err != nil {
 		return err
 	}
 	infraNames := make([]string, 0, len(infraSvcs))
+	details := make([]state.InfraDetail, 0, len(infraSvcs))
 	for _, s := range infraSvcs {
 		infraNames = append(infraNames, s.Name)
+		details = append(details, state.InfraDetail{
+			Name: s.Name, Kind: string(s.Kind), Mode: s.Mode,
+			Provider: s.Provider, Port: s.Port, Reason: s.Reason,
+		})
+	}
+	lockLinks := make(map[string][]state.LinkRef, len(links))
+	for appID, ls := range links {
+		refs := make([]state.LinkRef, 0, len(ls))
+		for _, l := range ls {
+			refs = append(refs, state.LinkRef{To: l.ServiceName})
+		}
+		lockLinks[appID] = refs
 	}
 	lock := &state.Lock{
 		Project:      projectName,
@@ -402,6 +437,8 @@ func persistState(parsed *git.ParsedURL, projectName, targetDir, outputSubdir st
 		OutputSubdir: outputSubdir,
 		Services:     services,
 		Infra:        infraNames,
+		InfraDetails: details,
+		Links:        lockLinks,
 		PortMap:      portMap,
 		Hash:         state.HashDetection(services),
 		LastInit:     time.Now().UTC(),
@@ -419,6 +456,7 @@ func maybeRunHeal(
 	treeStr string,
 	ia *initAgent,
 	totalSteps int,
+	portMap map[string]int,
 	io *initIO,
 ) (*healer.Result, error) {
 	if !doBuild {
@@ -433,18 +471,44 @@ func maybeRunHeal(
 	composePath := filepath.Join(outputDir, "docker-compose.yml")
 	cm := docker.New(composePath, targetDir, "yoink-"+repo)
 
-	// First try the build. If it succeeds (with runtime verification),
-	// we're done — no agent needed.
+	// leaveRunning starts the stack, waits for container health, runs HTTP
+	// verification on every published app service, and LEAVES THE STACK
+	// RUNNING on success (Phase 6). HTTP 5xx / refused / timeout are not
+	// success (Phase 5): a healthy container with a broken app is still a
+	// failure. Returns a blocked Result (stack torn down) when unhealthy.
+	leaveRunning := func() *healer.Result {
+		if _, err := cm.Up(ctx, "-d"); err != nil {
+			return &healer.Result{Success: false, Summary: "blocked", FinalOutput: "failed to start the stack: " + err.Error()}
+		}
+		if !waitForHealthQuick(ctx, cm, io) {
+			_, _ = cm.Down(ctx, false)
+			return &healer.Result{Success: false, Summary: "blocked", FinalOutput: "containers did not become healthy"}
+		}
+		checks := httpcheck.Services(ctx, services, portMap)
+		// Mark the project as up so `yoink status`/`yoink list` agree.
+		if mgr, err := state.For(repo); err == nil {
+			if lock, _ := mgr.LoadLock(); lock != nil {
+				lock.LastUp = time.Now().UTC()
+				_ = mgr.SaveLock(lock)
+			}
+		}
+		if !httpcheck.AllHealthy(checks) {
+			_, _ = cm.Down(ctx, false)
+			return &healer.Result{Success: false, Summary: "blocked", FinalOutput: blockedHTTPSummary(checks)}
+		}
+		return &healer.Result{Success: true, Summary: "success", FinalOutput: runningSummary(checks)}
+	}
+
+	// First try the build. If it succeeds (with runtime + HTTP verification),
+	// we're done — no agent needed — and the stack is left running.
 	buildOut, buildErr := cm.Build(ctx)
 	if buildErr == nil {
-		// Runtime verification.
-		_, _ = cm.Up(ctx, "-d")
-		healthy := waitForHealthQuick(ctx, cm, io)
-		_, _ = cm.Down(ctx, false)
-		if healthy {
+		res := leaveRunning()
+		if res.Success {
 			io.success("Build succeeded")
-			return &healer.Result{Success: true, FinalOutput: "verified green + runtime healthy"}, nil
+			return res, nil
 		}
+		_, _ = cm.Down(ctx, false)
 		io.warn("Build succeeded but runtime unhealthy — invoking agent")
 	} else {
 		io.info("Build failed — invoking agent for diagnosis and repair")
@@ -476,6 +540,11 @@ func maybeRunHeal(
 			return res, err
 		}
 		if res.Success {
+			// Deterministic healer repaired the build — start + verify +
+			// leave running (Phase 5+6).
+			res = leaveRunning()
+		}
+		if res.Success {
 			io.success("Build succeeded")
 		} else {
 			io.warn("Build still failing after heal attempts — see summary")
@@ -500,7 +569,18 @@ func maybeRunHeal(
 		return healRes, healErr
 	}
 	if healRes.Success {
-		io.success("Build succeeded — agent verified runtime health")
+		// Agent verified health during its cycles (stack is currently down).
+		// Phase 5+6: do the final start + HTTP verify + leave running. A
+		// container that is healthy but returns 5xx on HTTP is NOT success.
+		final := leaveRunning()
+		if final.Success {
+			io.success("Build succeeded — agent verified runtime health")
+			return final, nil
+		}
+		// Agent said success but the final HTTP probe failed: surface it as
+		// blocked rather than claiming success.
+		io.warn("Agent repaired the build but runtime verification failed")
+		return final, nil
 	} else if healRes.Summary == "configuration_required" {
 		// Configuration required — not a failure. Show the actionable report.
 		fmt.Println()
@@ -598,6 +678,16 @@ func loadInitConfig(io *initIO) (*config.Config, error) {
 	}
 	io.success("Configuration loaded")
 	return cfg, nil
+}
+
+// parseRepoRef resolves the init argument to a repository reference. Empty,
+// ".", or an existing directory is treated as a local repository (no clone);
+// anything else is parsed as a GitHub URL.
+func parseRepoRef(repoURL string) (*git.ParsedURL, error) {
+	if git.IsLocalRef(repoURL) {
+		return git.ParseLocal(repoURL)
+	}
+	return git.ParseURL(repoURL)
 }
 
 func prepareTargetDir(repoName string, io *initIO) (string, error) {
@@ -767,7 +857,19 @@ func renderCompletionSummary(repoName, outputDir, targetDir, outputSubdir string
 			b.WriteString("\n")
 		}
 		if hres.Success {
-			b.WriteString("\nBuild succeeded — start it with:\n  " + ui.HighlightStyle.Render("yoink up "+repoName))
+			// The stack is running (Phase 6). Show the live URLs + HTTP
+			// status rather than telling the user to run `yoink up`.
+			if hres.FinalOutput != "" {
+				b.WriteString("\n" + hres.FinalOutput)
+			} else {
+				b.WriteString("\nBuild succeeded — services running")
+			}
+			return b.String()
+		}
+		// configuration_required / blocked: the agent path already rendered
+		// the actionable report box; show the remaining next-steps otherwise.
+		if hres.FinalOutput != "" && (hres.Summary == "blocked" || hres.Summary == "failed") {
+			b.WriteString("\n" + hres.FinalOutput)
 			return b.String()
 		}
 	}
@@ -776,5 +878,45 @@ func renderCompletionSummary(repoName, outputDir, targetDir, outputSubdir string
 	fmt.Fprintf(&b, "  1. Edit  %s/env-vars/<service>/.env\n", outputSubdir)
 	fmt.Fprintf(&b, "  2. yoink up %s\n", repoName)
 	fmt.Fprintf(&b, "  3. yoink dash %s\n", repoName)
+	return b.String()
+}
+
+// runningSummary renders the live URLs + HTTP result for a successfully
+// running stack, shown by `yoink init` on success (Phase 6).
+func runningSummary(checks []httpcheck.Result) string {
+	if len(checks) == 0 {
+		return ui.SuccessStyle.Render("● Running") + "\n\n  (no HTTP services published)"
+	}
+	var b strings.Builder
+	b.WriteString(ui.SuccessStyle.Render("● Running") + "\n")
+	for _, c := range checks {
+		sym := ui.SymRun
+		line := c.URL
+		if c.Code != 0 {
+			line = fmt.Sprintf("%s  (HTTP %d)", c.URL, c.Code)
+		}
+		fmt.Fprintf(&b, "\n  %s  %s", ui.SuccessStyle.Render(sym), ui.HighlightStyle.Render(line))
+	}
+	return b.String()
+}
+
+// blockedHTTPSummary explains why the stack could not be left running: which
+// service's HTTP probe failed and how (application error / unreachable /
+// timeout). Container-healthy-but-5xx is reported here, not as success.
+func blockedHTTPSummary(checks []httpcheck.Result) string {
+	var b strings.Builder
+	b.WriteString(ui.ErrorStyle.Render("× runtime verification failed") + "\n")
+	for _, c := range checks {
+		if c.Healthy() {
+			continue
+		}
+		fmt.Fprintf(&b, "\n  %s  %s  %s", ui.ErrorStyle.Render(ui.SymFail), c.URL, c.Status)
+		if c.Code != 0 {
+			fmt.Fprintf(&b, " (HTTP %d)", c.Code)
+		}
+		if c.Err != "" {
+			b.WriteString("  " + c.Err)
+		}
+	}
 	return b.String()
 }

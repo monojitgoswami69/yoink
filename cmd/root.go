@@ -72,6 +72,7 @@ func init() {
 	rootCmd.AddCommand(removeCmd)
 	rootCmd.AddCommand(dashCmd)
 	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(explainCmd)
 
 	// Aliases that keep the canonical verbs short. Not advertised loudly.
 	rootCmd.AddCommand(&cobra.Command{

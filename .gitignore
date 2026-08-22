@@ -18,6 +18,7 @@ vendor/
 Thumbs.db
 build/
 dist/
+yoink-outputs/
 
 # Local environment / secrets (never commit real secrets)
 .env

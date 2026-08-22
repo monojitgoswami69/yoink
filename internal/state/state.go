@@ -33,16 +33,23 @@ type Manager struct {
 
 // For returns a Manager for the named repo. The state directory is created
 // on disk (0700) so callers can write immediately.
+// For returns a Manager for the named repo. The name is canonicalised so
+// "Sevatra" and "sevatra" share one state directory. The directory is
+// created on disk (0700) so callers can write immediately.
 func For(repo string) (*Manager, error) {
 	home, err := config.YoinkHome()
 	if err != nil {
 		return nil, err
 	}
-	dir := filepath.Join(home, "state", repo)
+	id := Canonicalize(repo)
+	if id == "" {
+		return nil, fmt.Errorf("project name cannot be empty")
+	}
+	dir := filepath.Join(home, "state", id)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("failed to create state dir: %w", err)
 	}
-	return &Manager{Dir: dir, Repo: repo}, nil
+	return &Manager{Dir: dir, Repo: id}, nil
 }
 
 // Lock captures everything `yoink up` / `yoink dash` need to know about a
@@ -59,6 +66,13 @@ type Lock struct {
 	OutputSubdir string             `json:"output_subdir"` // typically "yoink-outputs"
 	Services     []detector.Service `json:"services"`
 	Infra        []string           `json:"infra,omitempty"`
+	// InfraDetails is the compact projection of inferred infra services
+	// (name/kind/mode/provider/port/reason) so `yoink explain` and the
+	// ServiceGraph can render infrastructure without re-running detection.
+	InfraDetails []InfraDetail `json:"infra_details,omitempty"`
+	// Links is the compact app->infra dependency graph (keyed by app service
+	// ID) persisted for `yoink explain` and the ServiceGraph rebuild.
+	Links map[string][]LinkRef `json:"links,omitempty"`
 	// PortMap is the canonical host-port assignment for the app services
 	// (keyed by service ID). Infra ports are not pinned here.
 	PortMap  map[string]int `json:"port_map,omitempty"`

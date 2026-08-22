@@ -352,6 +352,7 @@ func (a *Agent) buildFinalReport(state FinalState) *FinalReport {
 		StartedAt:       a.State.StartedAt,
 		Duration:        time.Since(a.State.StartedAt),
 		AgentIterations: a.State.Iteration,
+		BuildsRun:       a.State.BuildsRun,
 		RequiredEnvVars: a.State.EnvReqs,
 	}
 	// Frameworks detected.
@@ -366,11 +367,136 @@ func (a *Agent) buildFinalReport(state FinalState) *FinalReport {
 			report.AgentPatches = append(report.AgentPatches, p)
 		}
 	}
-	// Build log tail.
+	// Diagnosis + activity (Phase 10).
+	inspected := 0
+	for _, tc := range a.State.ToolHistory {
+		if tc.Tool == "read_file" || tc.Tool == "search" || tc.Tool == "list_tree" {
+			inspected++
+		}
+	}
+	report.FilesInspected = inspected
 	if a.State.CurrentFailure != nil {
+		report.FailureCategory = a.State.CurrentFailure.Category
+		// LastError: prefer the explicit error, trimmed to one line.
+		if e := a.State.CurrentFailure.Error; e != "" {
+			report.LastError = oneLine(e)
+		}
 		report.BuildLogTail = a.State.CurrentFailure.RelevantLog
 	}
+	report.WhyStopped = a.whyStopped(state)
+	report.NextAction = a.nextAction(state)
 	return report
+}
+
+// whyStopped explains (for a blocked/failed report) the reason Yoink
+// stopped trying to repair the build. It never claims the LLM "fixed it".
+func (a *Agent) whyStopped(state FinalState) string {
+	switch state {
+	case StateConfigRequired:
+		return "unavailable credentials — required secret values cannot be safely inferred"
+	case StateBlocked:
+		if a.State.BuildsRun >= a.State.Budget.MaxBuilds {
+			return "build budget exhausted"
+		}
+		if a.State.Iteration >= a.State.Budget.MaxIterations {
+			return "iteration budget exhausted"
+		}
+		return "the failure could not be resolved within the agent's bounded budget"
+	case StateFailed:
+		return "a Yoink/Docker system error prevented completion"
+	}
+	return ""
+}
+
+// nextAction suggests the single most useful next step for a non-success state.
+func (a *Agent) nextAction(state FinalState) string {
+	name := a.State.ProjectName
+	if name == "" {
+		name = "<project>"
+	}
+	switch state {
+	case StateConfigRequired:
+		return fmt.Sprintf("run `yoink env %s` to provide the required values, then `yoink up %s`", name, name)
+	case StateBlocked:
+		return fmt.Sprintf("inspect the build output above; the failure may need a code or config change Yoink can't safely automate. Run `yoink explain %s` for the evidence summary.", name)
+	case StateFailed:
+		return "ensure Docker is running (`yoink doctor`) and re-run `yoink init`"
+	}
+	return ""
+}
+
+// callLLMWithRetry wraps LLMClient.Call with a bounded retry for transient
+// provider errors (HTTP 503, timeouts, connection resets). It preserves
+// agent state (no partial patches are applied here) and never corrupts
+// generated files — a failed retry simply re-issues the read-only LLM call.
+// Backoff is short (2s, 4s) so it stays well within the agent's time budget.
+func (a *Agent) callLLMWithRetry(ctx context.Context, sys, user string) (string, error) {
+	const maxAttempts = 3
+	backoff := 2 * time.Second
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		raw, err := a.LLM.Call(ctx, sys, user)
+		if err == nil {
+			return raw, nil
+		}
+		lastErr = err
+		if !isTransientLLMError(err) || attempt == maxAttempts {
+			return "", err
+		}
+		a.log(fmt.Sprintf("  ↳ transient LLM error (attempt %d/%d): %v", attempt, maxAttempts, err))
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+		backoff *= 2
+	}
+	return "", lastErr
+}
+
+// isTransientLLMError reports whether an LLM error is likely to resolve on
+// retry (provider overload, timeout, network). A 4xx auth/validation error is
+// NOT transient and must not be retried.
+func isTransientLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToUpper(err.Error())
+	for _, sig := range []string{"503", "502", "504", "TIMEOUT", "DEADLINE", "CONNECTION REFUSED", "RESET", "EOF", "TEMPORARY", "UNAVAILABLE", "OVERLOADED"} {
+		if strings.Contains(msg, sig) {
+			return true
+		}
+	}
+	return false
+}
+
+// normalizePatchOp maps common LLM-emitted operation names onto the set
+// ApplyPatch supports (insert_after, insert_before, replace_line,
+// replace_exact, create_file). Unknown ops pass through unchanged so an
+// unsupported operation still surfaces a clear error.
+func normalizePatchOp(op string) string {
+	switch strings.ToLower(strings.TrimSpace(op)) {
+	case "replace", "replace_all", "replace_block", "overwrite":
+		return "replace_exact"
+	case "insert", "insert_after_line":
+		return "insert_after"
+	case "insert_before_line":
+		return "insert_before"
+	case "replace_line", "replace_lines":
+		return "replace_line"
+	case "create", "create_file", "new_file":
+		return "create_file"
+	}
+	return op
+}
+
+// oneLine collapses a multi-line error to its first non-empty line, trimmed.
+func oneLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	return strings.TrimSpace(s)
 }
 
 // isSecretName checks if the variable name looks like a secret.
@@ -394,8 +520,10 @@ func (a *Agent) agentIteration(ctx context.Context) (bool, error) {
 	// selected by the existing selectRelevantFiles logic.
 	userPrompt := a.buildContextPrompt()
 
-	// Call the LLM.
-	raw, err := a.LLM.Call(ctx, agentSystemPrompt, userPrompt)
+	// Call the LLM (bounded retry on transient provider errors — 503,
+	// timeout, connection — so a momentary load spike doesn't abort the
+	// heal loop). Non-transient errors fail fast.
+	raw, err := a.callLLMWithRetry(ctx, agentSystemPrompt, userPrompt)
 	if err != nil {
 		return false, err
 	}
@@ -660,12 +788,16 @@ func (a *Agent) toolCheckHealth(ctx context.Context) string {
 
 func (a *Agent) applyAgentPatches(changes []healer.Change) bool {
 	// Normalize file paths FIRST (strip yoink-outputs/ prefix) so the
-	// originals map uses the same keys as the in-memory Output.Files.
+	// originals map uses the same keys as the in-memory Output.Files. Also
+	// normalise the operation name: LLMs often emit "replace" or "replace_all"
+	// but ApplyPatch only knows replace_line/replace_exact — map the common
+	// variants so a valid patch isn't rejected on a naming mismatch.
 	normalized := make([]healer.Change, len(changes))
 	for i, c := range changes {
 		file := strings.TrimPrefix(c.File, "yoink-outputs/")
 		normalized[i] = c
 		normalized[i].File = file
+		normalized[i].Operation = normalizePatchOp(c.Operation)
 	}
 	changes = normalized
 

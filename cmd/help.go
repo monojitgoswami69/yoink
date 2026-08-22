@@ -53,6 +53,7 @@ func showHelp() {
 		{"UI & SYSTEM", [][]string{
 			{"dash", "[project]", "Open the live dashboard"},
 			{"doctor", "", "Diagnose your local setup"},
+			{"explain", "[project]", "Summarise what Yoink detected/repaired"},
 			{"help", "", "Show this help message"},
 		}},
 	}

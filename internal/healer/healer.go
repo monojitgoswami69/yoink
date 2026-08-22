@@ -140,14 +140,6 @@ func (l *Loop) Run(ctx context.Context) (*Result, error) {
 		failure.Progression = ClassifyProgression(&failure, prevFailure)
 		l.log(fmt.Sprintf("  ↳ failure: %s (%s)", failure.Category, failure.Progression))
 
-		// No LLM configured — surface the failure but make no fix attempt.
-		if l.LLM == nil {
-			attempt.Summary = "build failed; no LLM configured to heal"
-			res.Attempts = append(res.Attempts, attempt)
-			res.FinalOutput = attempt.LogTail
-			return res, nil
-		}
-
 		// Resolve the canonical service ID ONCE and use it everywhere.
 		// When ExtractFailedService returns "" (common for single-service
 		// repos), default to the first/only service. This prevents the
@@ -172,7 +164,11 @@ func (l *Loop) Run(ctx context.Context) (*Result, error) {
 		}
 		compose := l.Output.Files["docker-compose.yml"]
 
-		// Deterministic pre-fix for known failure patterns.
+		// Deterministic pre-fix for known failure patterns. These run
+		// REGARDLESS of whether an LLM is configured — they need no model
+		// and are the highest-confidence repairs (Phase 11 boundary:
+		// deterministic before agentic). If one applies, rebuild and verify;
+		// only when no deterministic fix applies do we need the LLM.
 		if fixed, summary, ok := deterministicFix(attempt.LogTail, failingDockerfile, attempt.Service); ok {
 			attempt.Status = StatusFixed
 			attempt.Summary = summary
@@ -193,6 +189,15 @@ func (l *Loop) Run(ctx context.Context) (*Result, error) {
 			})
 			prevFailure = &failure
 			continue
+		}
+
+		// No LLM configured and no deterministic fix applied — surface the
+		// failure. (Deterministic fixes above already ran.)
+		if l.LLM == nil {
+			attempt.Summary = "build failed; no LLM configured to heal"
+			res.Attempts = append(res.Attempts, attempt)
+			res.FinalOutput = attempt.LogTail
+			return res, nil
 		}
 
 		// Build the structured context pack — includes service metadata,

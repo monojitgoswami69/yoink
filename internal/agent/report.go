@@ -34,8 +34,15 @@ type FinalReport struct {
 	RequiredEnvVars    []EnvRequirement
 	URLs               []string
 	BuildLogTail       string
-	StartedAt          time.Time
-	Duration           time.Duration
+	// Phase 10 structured failure reporting (blocked/failed).
+	FailureCategory string // last failure category (e.g. compilation, nextjs-build)
+	LastError       string // last error message
+	BuildsRun       int
+	FilesInspected  int    // read_file/search/list_tree tool calls
+	WhyStopped      string // budget exhausted | unavailable credentials | unsafe patch | unresolved
+	NextAction      string
+	StartedAt       time.Time
+	Duration        time.Duration
 }
 
 // Render produces the user-facing summary string.
@@ -113,6 +120,39 @@ func (r *FinalReport) Render() string {
 	// Build log for failed/blocked.
 	if r.BuildLogTail != "" && (r.State == StateBlocked || r.State == StateFailed) {
 		fmt.Fprintf(&b, "\nBuild output (tail):\n%s\n", r.BuildLogTail)
+	}
+
+	// Structured failure detail (Phase 10): diagnosis, activity, changes,
+	// why Yoink stopped, next action. Only for blocked/failed.
+	if r.State == StateBlocked || r.State == StateFailed {
+		if r.FailureCategory != "" || r.LastError != "" {
+			b.WriteString("\nFinal diagnosis\n")
+			if r.FailureCategory != "" {
+				fmt.Fprintf(&b, "  category:  %s\n", r.FailureCategory)
+			}
+			if r.LastError != "" {
+				fmt.Fprintf(&b, "  error:     %s\n", r.LastError)
+			}
+		}
+		b.WriteString("\nAgent activity\n")
+		fmt.Fprintf(&b, "  iterations: %d\n", r.AgentIterations)
+		fmt.Fprintf(&b, "  builds:     %d\n", r.BuildsRun)
+		fmt.Fprintf(&b, "  inspected:  %d file(s)\n", r.FilesInspected)
+		if len(r.AgentPatches) > 0 || len(r.DeterministicFixes) > 0 {
+			b.WriteString("\nChanges made\n")
+			for _, f := range r.DeterministicFixes {
+				fmt.Fprintf(&b, "  + %s\n", f)
+			}
+			for _, p := range r.AgentPatches {
+				fmt.Fprintf(&b, "  + %s (%s)\n", p.File, p.Operation)
+			}
+		}
+		if r.WhyStopped != "" {
+			fmt.Fprintf(&b, "\nWhy Yoink stopped\n  %s\n", r.WhyStopped)
+		}
+		if r.NextAction != "" {
+			fmt.Fprintf(&b, "\nNext action\n  %s\n", r.NextAction)
+		}
 	}
 
 	return b.String()

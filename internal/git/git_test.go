@@ -1,6 +1,11 @@
 package git
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestParseURL(t *testing.T) {
 	cases := []struct {
@@ -48,5 +53,72 @@ func TestExtractRepoName(t *testing.T) {
 	}
 	if got := ExtractRepoName("nonsense"); got != "" {
 		t.Errorf("ExtractRepoName invalid: got %q", got)
+	}
+}
+
+func TestIsLocalRef(t *testing.T) {
+	dir := t.TempDir()
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"", true},
+		{".", true},
+		{"./", true},
+		{dir, true},
+		{"https://github.com/foo/bar", false},
+		{"git@github.com:foo/bar", false},
+		{"/nonexistent/path/xyz", false},
+		{"not-a-url-not-a-dir", false},
+	}
+	for _, c := range cases {
+		if got := IsLocalRef(c.in); got != c.want {
+			t.Errorf("IsLocalRef(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
+func TestParseLocal(t *testing.T) {
+	// Empty path -> cwd. Verify it resolves to an absolute dir.
+	p, err := ParseLocal("")
+	if err != nil {
+		t.Fatalf("ParseLocal(\"\"): %v", err)
+	}
+	if p.Owner != "local" {
+		t.Errorf("Owner: want local, got %s", p.Owner)
+	}
+	if !filepath.IsAbs(p.LocalPath) {
+		t.Errorf("LocalPath should be absolute, got %s", p.LocalPath)
+	}
+	if !strings.HasPrefix(p.Clone, "file://") {
+		t.Errorf("Clone should be file:// URL, got %s", p.Clone)
+	}
+	if p.Repo == "" {
+		t.Error("Repo should be the directory base name, got empty")
+	}
+
+	// Existing temp dir -> name = base name.
+	dir := t.TempDir()
+	p, err = ParseLocal(dir)
+	if err != nil {
+		t.Fatalf("ParseLocal(%s): %v", dir, err)
+	}
+	if p.Repo != filepath.Base(dir) {
+		t.Errorf("Repo: want %s, got %s", filepath.Base(dir), p.Repo)
+	}
+	if p.LocalPath != dir {
+		t.Errorf("LocalPath: want %s, got %s", dir, p.LocalPath)
+	}
+
+	// Non-existent path -> error.
+	if _, err := ParseLocal("/nonexistent/xyz"); err == nil {
+		t.Error("ParseLocal should error on non-existent path")
+	}
+
+	// File (not dir) -> error.
+	f := filepath.Join(t.TempDir(), "file")
+	os.WriteFile(f, []byte("x"), 0644)
+	if _, err := ParseLocal(f); err == nil {
+		t.Error("ParseLocal should error on a non-directory")
 	}
 }

@@ -11,13 +11,18 @@ import (
 	"strings"
 )
 
-// ParsedURL describes a GitHub repository reference.
+// ParsedURL describes a GitHub repository reference, or a local repository
+// directory (when Owner == "local" and LocalPath is set).
 type ParsedURL struct {
 	Owner  string
 	Repo   string
 	Branch string // optional — set when the URL pointed at a /tree/<branch>/...
 	Subdir string // optional — when /tree/<branch>/<subdir> was given
-	Clone  string // canonical https clone URL
+	Clone  string // canonical https clone URL (or file://<abs> for local)
+	// LocalPath is the absolute path to the repository on disk. Set only for
+	// local-mode inits (yoink init . / yoink init / yoink init <dir>); empty
+	// for GitHub clones, which are materialised into ~/.yoink/repos/<name>.
+	LocalPath string
 }
 
 var (
@@ -53,6 +58,51 @@ func ParseURL(s string) (*ParsedURL, error) {
 		return p, nil
 	}
 	return nil, fmt.Errorf("not a GitHub URL: %q", s)
+}
+
+// ParseLocal resolves a local repository directory reference. An empty path
+// ("yoink init" with no argument) means the current working directory. The
+// path must exist and be a directory; otherwise an error is returned so the
+// caller can fall back to URL parsing or surface a clear message.
+//
+// The returned ParsedURL has Owner "local", Repo set to the directory's base
+// name, Clone as a file:// URL, and LocalPath as the absolute path. No
+// network operation is performed.
+func ParseLocal(s string) (*ParsedURL, error) {
+	if s = strings.TrimSpace(s); s == "" {
+		s = "."
+	}
+	abs, err := filepath.Abs(s)
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return nil, fmt.Errorf("local repository not found: %s: %w", s, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("not a directory: %s", s)
+	}
+	name := filepath.Base(abs)
+	if name == "" || name == string(filepath.Separator) {
+		name = "repo"
+	}
+	return &ParsedURL{Owner: "local", Repo: name, Clone: "file://" + abs, LocalPath: abs}, nil
+}
+
+// IsLocalRef reports whether s refers to a local repository rather than a
+// GitHub URL. Empty, ".", "./", and any existing directory path are local;
+// http(s):// and git@ URLs are not.
+func IsLocalRef(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" || s == "." || s == "./" {
+		return true
+	}
+	if strings.Contains(s, "://") || strings.HasPrefix(s, "git@") {
+		return false
+	}
+	info, err := os.Stat(s)
+	return err == nil && info.IsDir()
 }
 
 // ExtractRepoName returns just the repo name, or "" on failure.
