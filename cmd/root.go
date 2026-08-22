@@ -55,6 +55,35 @@ func init() {
 	rootCmd.SetVersionTemplate(fmt.Sprintf("Yoink %s (built %s)\n", Version, BuildTime))
 
 	rootCmd.AddCommand(helpCmd)
+	rootCmd.AddCommand(setupCmd)
+	rootCmd.AddCommand(initCmd)
+	rootCmd.AddCommand(listCmd)
+	rootCmd.AddCommand(statusCmd)
+	rootCmd.AddCommand(upCmd)
+	rootCmd.AddCommand(downCmd)
+	rootCmd.AddCommand(restartCmd)
+	rootCmd.AddCommand(openCmd)
+	rootCmd.AddCommand(logsCmd)
+	rootCmd.AddCommand(envCmd)
+	rootCmd.AddCommand(statsCmd)
+	rootCmd.AddCommand(healCmd)
+	rootCmd.AddCommand(updateCmd)
+	rootCmd.AddCommand(configCmd)
+	rootCmd.AddCommand(removeCmd)
+	rootCmd.AddCommand(dashCmd)
+	rootCmd.AddCommand(doctorCmd)
+
+	// Aliases that keep the canonical verbs short. Not advertised loudly.
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "start [project]",
+		Short: "Alias for up",
+		Run:   upCmd.Run,
+	})
+	rootCmd.AddCommand(&cobra.Command{
+		Use:   "stop [project]",
+		Short: "Alias for down",
+		Run:   downCmd.Run,
+	})
 }
 
 // GetVerbose returns whether verbose mode is enabled.
