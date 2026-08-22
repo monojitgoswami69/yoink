@@ -30,7 +30,7 @@ func showHelp() {
 		{"PROJECTS", [][]string{
 			{"init", "<repo>", "Initialize a repository into a project"},
 			{"list", "", "List initialized projects"},
-			{"remove", "<project>", "Remove a project"},
+			{"incinerate", "<project>", "Permanently remove a project"},
 		}},
 		{"RUNTIME", [][]string{
 			{"up", "<project>", "Start a project"},
@@ -43,17 +43,15 @@ func showHelp() {
 		}},
 		{"CONFIGURATION", [][]string{
 			{"env", "<project>", "Manage application environment variables"},
-			{"config", "<project>", "Configure Yoink settings for a project"},
 			{"setup", "", "Configure global Yoink settings (LLM, PAT)"},
 		}},
 		{"INTELLIGENCE", [][]string{
 			{"heal", "<project>", "Diagnose and repair build failures"},
 			{"update", "<project>", "Pull changes, rebuild, and restart"},
-		}},
-		{"UI & SYSTEM", [][]string{
-			{"dash", "[project]", "Open the live dashboard"},
-			{"doctor", "", "Diagnose your local setup"},
 			{"explain", "[project]", "Summarise what Yoink detected/repaired"},
+		}},
+		{"SYSTEM", [][]string{
+			{"doctor", "", "Diagnose your local setup"},
 			{"help", "", "Show this help message"},
 		}},
 	}
@@ -62,7 +60,7 @@ func showHelp() {
 		fmt.Println("  " + ui.BoldStyle.Render(g.title))
 		fmt.Println()
 		for _, r := range g.rows {
-			name := ui.PrimaryStyle.Render(fmt.Sprintf("%-9s", r[0]))
+			name := ui.PrimaryStyle.Render(fmt.Sprintf("%-12s", r[0]))
 			args := ui.HighlightStyle.Render(fmt.Sprintf("%-20s", r[1]))
 			fmt.Printf("    %s %s %s\n", name, args, r[2])
 		}
@@ -89,7 +87,7 @@ func showHelp() {
 		"yoink env fastapi",
 		"yoink up fastapi",
 		"yoink status fastapi",
-		"yoink dash fastapi",
+		"yoink open fastapi",
 	}
 	for _, e := range flow {
 		fmt.Println("    " + ui.HighlightStyle.Render(e))

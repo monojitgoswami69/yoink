@@ -124,6 +124,7 @@ func runHeal(cmd *cobra.Command, args []string) error {
 		if res.FinalOutput != "" {
 			fmt.Println(ui.DimStyle.Render(res.FinalOutput))
 		}
+		return fmt.Errorf("build still failing after %d heal attempt(s)", len(res.Attempts))
 	}
 	return nil
 }

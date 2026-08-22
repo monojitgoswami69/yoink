@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -19,6 +20,7 @@ var listCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := runList(cmd); err != nil {
 			fmt.Println(ui.Error(err.Error(), ""))
+			os.Exit(1)
 		}
 	},
 }
@@ -52,6 +54,8 @@ func runList(cmd *cobra.Command) error {
 	defer cancel()
 
 	rows := [][]string{}
+	runningCount := 0
+	stoppedCount := 0
 	for _, p := range all {
 		running, _ := p.IsRunning(ctx)
 		if listRunning && !running {
@@ -60,15 +64,29 @@ func runList(cmd *cobra.Command) error {
 		if listStopped && running {
 			continue
 		}
+		if running {
+			runningCount++
+		} else {
+			stoppedCount++
+		}
 		status := ui.MutedStyle.Render(ui.SymStop + " stopped")
 		if running {
 			status = ui.SuccessStyle.Render(ui.SymRun + " running")
 		}
+		urls := project.ConfiguredURLs(p)
+		urlStr := "-"
+		if len(urls) > 0 {
+			parts := make([]string, 0, len(urls))
+			for _, u := range urls {
+				parts = append(parts, u.URL)
+			}
+			urlStr = strings.Join(parts, ", ")
+		}
 		rows = append(rows, []string{
 			ui.BoldStyle.Render(p.Name),
-			ui.MutedStyle.Render(shortRepo(p.Lock.RepoURL)),
 			status,
 			fmt.Sprintf("%d", len(p.Lock.Services)),
+			ui.MutedStyle.Render(urlStr),
 		})
 	}
 	if len(rows) == 0 {
@@ -81,10 +99,17 @@ func runList(cmd *cobra.Command) error {
 	}
 	fmt.Print(ui.Columns{
 		Title:   "Projects",
-		Headers: []string{"Name", "Repository", "Status", "Services"},
+		Headers: []string{"Name", "Status", "Services", "URLs"},
 		Rows:    rows,
 	}.Render())
-	fmt.Printf("\n  %s\n", ui.MutedStyle.Render(plural(len(rows), "project")))
+	fmt.Printf("\n  %s", ui.MutedStyle.Render(plural(len(rows), "project")))
+	if runningCount > 0 {
+		fmt.Printf("  ·  %d running", runningCount)
+	}
+	if stoppedCount > 0 {
+		fmt.Printf("  ·  %d stopped", stoppedCount)
+	}
+	fmt.Println()
 	return nil
 }
 

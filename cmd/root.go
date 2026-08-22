@@ -72,9 +72,8 @@ func init() {
 	rootCmd.AddCommand(statsCmd)
 	rootCmd.AddCommand(healCmd)
 	rootCmd.AddCommand(updateCmd)
-	rootCmd.AddCommand(configCmd)
-	rootCmd.AddCommand(removeCmd)
-	rootCmd.AddCommand(dashCmd)
+	rootCmd.AddCommand(incinerateCmd)
+	rootCmd.AddCommand(removeCmd) // hidden alias
 	rootCmd.AddCommand(doctorCmd)
 	rootCmd.AddCommand(explainCmd)
 

@@ -165,7 +165,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		// If heal didn't succeed, fall through with the error.
 		if buildErr != nil {
 			fmt.Println(ui.DimStyle.Render(docker.TailLines(buildOut, 40)))
-			return nil
+			return fmt.Errorf("build failed and could not be healed")
 		}
 	}
 	io.success("Build succeeded.")

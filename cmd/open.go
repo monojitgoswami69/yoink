@@ -18,10 +18,7 @@ var openCmd = &cobra.Command{
 	Use:   "open [project]",
 	Short: "Open the application in your browser",
 	Long: `Open the project's public URL in the system's default browser. When
-no project is given, the most recently initialised one is used.
-
-Flags:
-  --dashboard   Open the Yoink dashboard instead of the app URL`,
+no project is given, the most recently initialised one is used.`,
 	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := runOpen(cmd, args); err != nil {
@@ -29,12 +26,6 @@ Flags:
 			os.Exit(1)
 		}
 	},
-}
-
-var openDashboard bool
-
-func init() {
-	openCmd.Flags().BoolVar(&openDashboard, "dashboard", false, "Open the Yoink dashboard instead of the app URL")
 }
 
 func runOpen(cmd *cobra.Command, args []string) error {
@@ -49,10 +40,6 @@ func runOpen(cmd *cobra.Command, args []string) error {
 	p, err := project.Resolve(name)
 	if err != nil {
 		return err
-	}
-
-	if openDashboard {
-		return runDash(args)
 	}
 
 	// Prefer a live URL; fall back to the configured port map so `open`

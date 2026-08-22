@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -24,9 +25,7 @@ graph, agent repairs, and any configuration still required.
 
 No LLM is invoked and no information is invented — this command only
 reports what Yoink already determined during init.`,
-	Args:          cobra.MaximumNArgs(1),
-	SilenceErrors: true,
-	SilenceUsage:  true,
+	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		name := ""
 		if len(args) > 0 {
@@ -34,7 +33,8 @@ reports what Yoink already determined during init.`,
 		}
 		if err := runExplain(name); err != nil {
 			fmt.Println()
-			fmt.Println(ui.ErrorBox.Render(err.Error()))
+			fmt.Println(ui.ErrorBox.Render("Error: " + err.Error()))
+			os.Exit(1)
 		}
 	},
 }
@@ -209,9 +209,10 @@ type envReqRow struct {
 }
 
 func requiredEnvRows(services []detector.Service) []envReqRow {
-	// state.Lock has Services []detector.Service; BuildEnv holds the injected
-	// placeholders. A var is "required" when it's a secret, empty, or a
-	// placeholder the user must replace.
+	// Only report variables that are actually missing — empty or placeholder.
+	// Do not report variables that have a real value, even if the name looks
+	// like a secret. This uses the same evidence-based approach as the agent's
+	// environment intelligence: a value being present means it is not required.
 	seen := map[string]bool{}
 	var out []envReqRow
 	for _, s := range services {
@@ -219,15 +220,12 @@ func requiredEnvRows(services []detector.Service) []envReqRow {
 			if seen[name] {
 				continue
 			}
-			req := false
 			class := "configuration"
 			if isSecretEnvName(name) {
-				req = true
 				class = "secret"
-			} else if val == "" || val == "yoink-build-placeholder" {
-				req = true
 			}
-			if !req {
+			// Only report as required if the value is genuinely missing.
+			if val != "" && val != "yoink-build-placeholder" {
 				continue
 			}
 			seen[name] = true

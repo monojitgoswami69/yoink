@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strconv"
 
 	"yoink/internal/project"
 	"yoink/internal/ui"
@@ -81,7 +80,6 @@ func runLogs(cmd *cobra.Command, args []string) error {
 		fmt.Println(ui.MutedStyle.Render("  No logs yet."))
 		return nil
 	}
-	_ = strconv.Itoa(logsTail)
 	fmt.Print(out)
 	return nil
 }
