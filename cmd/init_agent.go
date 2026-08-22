@@ -132,7 +132,7 @@ func (a *initAgent) validateEnvVars(ctx context.Context, results *[]envvar.Resul
 	}
 	for _, c := range resp.CorrectedEnvVars {
 		if idx, ok := byDir[c.Directory]; ok {
-			(*results)[idx].EnvContent = c.EnvContent
+			(*results)[idx].EnvContent = envvar.MergeProvidedValues((*results)[idx].EnvContent, c.EnvContent)
 			(*results)[idx].Technology = c.Technology
 		}
 	}

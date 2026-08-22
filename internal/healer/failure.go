@@ -16,7 +16,8 @@ type Failure struct {
 	Command       string   // the build command that was run
 	ExitCode      int      // exit code (usually 1)
 	Error         string   // the primary error message (first meaningful error line)
-	RelevantLog   string   // relevant log excerpt (around the error, ~15 lines)
+	RawLog        string   // complete combined stdout/stderr from Docker/Compose
+	RelevantLog   string   // causal log excerpt around the root error and terminal context
 	FileRefs      []string // file paths referenced in the error
 	PackageRefs   []string // package/module names referenced (e.g. "@napi-rs/canvas")
 	PathRefs      []string // COPY paths or other filesystem paths referenced
@@ -40,9 +41,13 @@ func AnalyzeFailure(buildOut, service string) Failure {
 
 	lines := strings.Split(buildOut, "\n")
 
-	// Extract the primary error line (first meaningful error).
+	// Select the most defensible application/root-cause line. Docker's final
+	// checksum and wrapper errors are retained in RawLog but do not outrank an
+	// earlier compiler, package manager, framework, or application error.
+	rootIdx := rootCauseIndex(lines)
 	f.Error = extractPrimaryError(lines)
-	f.RelevantLog = extractRelevantLog(lines)
+	f.RawLog = buildOut
+	f.RelevantLog = extractRelevantLog(lines, rootIdx)
 	f.Stage = extractStage(lines, service)
 	f.Category = categorize(f.Error, lines)
 
@@ -106,76 +111,98 @@ var specificErrorRe = regexp.MustCompile(`(?i)(?:error TS\d+:|Cannot find module
 var genericErrorRe = regexp.MustCompile(`(?i)(?:failed to solve|returned a non-zero code|exited with code)`)
 
 func extractPrimaryError(lines []string) string {
-	// Phase 1: walk bottom-up, skip generic wrappers, return the first
-	// line matching a SPECIFIC error pattern.
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if genericErrorRe.MatchString(line) {
-			continue // skip BuildKit wrapper — the real error is above
-		}
-		if specificErrorRe.MatchString(line) {
-			return stripBuildKitPrefix(line)
-		}
+	idx := rootCauseIndex(lines)
+	if idx >= 0 {
+		return stripBuildKitPrefix(strings.TrimSpace(lines[idx]))
 	}
-	// Phase 2: if no specific error found, return the first generic error
-	// (or last non-empty line) as a fallback.
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		if genericErrorRe.MatchString(line) {
-			return stripBuildKitPrefix(line)
-		}
-	}
-	// Phase 3: last non-empty, non-comment line.
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if line != "" && !strings.HasPrefix(line, "#") {
-			return line
-		}
-	}
-	return "unknown error"
+	return "root cause could not be determined from Docker build output"
 }
 
-func extractRelevantLog(lines []string) string {
-	// Find the error line index (specific first, then generic).
-	errIdx := -1
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if genericErrorRe.MatchString(line) {
-			continue
-		}
-		if specificErrorRe.MatchString(line) {
-			errIdx = i
-			break
-		}
+func extractRelevantLog(lines []string, rootIdx int) string {
+	if len(lines) == 0 {
+		return ""
 	}
-	if errIdx < 0 {
-		// Try generic error as fallback.
-		for i := len(lines) - 1; i >= 0; i-- {
-			if genericErrorRe.MatchString(strings.TrimSpace(lines[i])) {
-				errIdx = i
-				break
-			}
-		}
+	if rootIdx < 0 {
+		return strings.Join(lines, "\n")
 	}
-	if errIdx < 0 {
-		start := len(lines) - 15
-		if start < 0 {
-			start = 0
-		}
-		return strings.Join(lines[start:], "\n")
-	}
-	start := errIdx - 5
+	// Include causal lead-in and the terminal Docker context. This remains
+	// bounded for the LLM while preserving both the root and downstream clues.
+	start := rootIdx - 12
 	if start < 0 {
 		start = 0
 	}
-	end := errIdx + 10
+	end := rootIdx + 28
 	if end > len(lines) {
 		end = len(lines)
 	}
+	if tailStart := len(lines) - 12; tailStart > end {
+		end = len(lines)
+	}
 	return strings.Join(lines[start:end], "\n")
+}
+
+// rootCauseIndex ranks error candidates instead of assuming the last matching
+// line is causal. BuildKit often reports a missing output directory after the
+// application compiler has already failed.
+func rootCauseIndex(lines []string) int {
+	bestIdx, bestScore := -1, -1
+	for i, raw := range lines {
+		line := strings.TrimSpace(raw)
+		candidate := stripBuildKitPrefix(line)
+		if line == "" {
+			continue
+		}
+		score := errorScore(candidate)
+		if score == 0 {
+			continue
+		}
+		if score > bestScore {
+			bestIdx, bestScore = i, score
+		}
+	}
+	if bestIdx >= 0 {
+		return bestIdx
+	}
+	for i, raw := range lines {
+		if genericErrorRe.MatchString(strings.TrimSpace(raw)) {
+			return i
+		}
+	}
+	return -1
+}
+
+func errorScore(line string) int {
+	low := strings.ToLower(line)
+	if genericErrorRe.MatchString(line) || strings.Contains(low, "process ") && strings.Contains(low, "did not complete successfully") {
+		return 10
+	}
+	if strings.Contains(low, "failed to calculate checksum") || strings.Contains(low, "checksum") && strings.Contains(low, "not found") || strings.Contains(low, ".next") && strings.Contains(low, "not found") || strings.Contains(low, "dist") && strings.Contains(low, "not found") || strings.Contains(low, "build output directory") {
+		return 15
+	}
+	score := 0
+	switch {
+	case regexp.MustCompile(`(?i)error ts\d+`).MatchString(line):
+		score = 100
+	case strings.Contains(low, "npm error") || strings.Contains(low, "npm err") || strings.Contains(low, "pnpm ") || strings.Contains(low, "yarn error"):
+		score = 95
+	case strings.Contains(low, "cannot find module") || strings.Contains(low, "no module named") || strings.Contains(low, "modulenotfounderror") || strings.Contains(low, "importerror"):
+		score = 94
+	case strings.Contains(low, "traceback (most recent call last)") || strings.Contains(low, "pydantic") || strings.Contains(low, "validationerror"):
+		score = 93
+	case strings.Contains(low, "rollup") || strings.Contains(low, "esbuild") || strings.Contains(low, "failed to resolve import") || strings.Contains(low, "vite") && (strings.Contains(low, "error") || strings.Contains(low, "failed")):
+		score = 92
+	case strings.Contains(low, "failed to collect page data") || strings.Contains(low, "error occurred prerendering") || strings.Contains(low, "build error occurred"):
+		score = 90
+	case strings.Contains(low, "missing environment variable") || strings.Contains(low, "is not defined") || strings.Contains(low, "is required"):
+		score = 88
+	case strings.Contains(low, "requires a different python") || strings.Contains(low, "requires-python"):
+		score = 87
+	case strings.Contains(low, "unknown instruction") || strings.Contains(low, "dockerfile") && (strings.Contains(low, "syntax") || strings.Contains(low, "parse")):
+		score = 60
+	case specificErrorRe.MatchString(line):
+		score = 70
+	}
+	return score
 }
 
 var stageRe = regexp.MustCompile(`\[([a-z0-9-]+)\s+(\w+)\s+\d+/\d+\]`)
@@ -201,19 +228,25 @@ func categorize(errorLine string, lines []string) string {
 	switch {
 	case strings.Contains(low, "error ts"):
 		return "compilation"
+	case strings.Contains(low, "rollup") || strings.Contains(low, "vite") || strings.Contains(low, "esbuild") || strings.Contains(low, "failed to resolve import"):
+		return "compilation"
 	case strings.Contains(low, "copy") && (strings.Contains(low, "not found") || strings.Contains(low, "does not exist") || strings.Contains(low, "checksum")):
 		return "configuration"
 	case strings.Contains(low, "checksum") && strings.Contains(low, "not found"):
 		return "configuration"
-	case strings.Contains(low, "cannot find module") || strings.Contains(low, "modulenotfounderror"):
+	case strings.Contains(low, "cannot find module") || strings.Contains(low, "modulenotfounderror") || strings.Contains(low, "importerror") || strings.Contains(low, "traceback"):
+		return "dependency"
+	case strings.Contains(low, "npm error") || strings.Contains(low, "yarn error") || strings.Contains(low, "pnpm error"):
 		return "dependency"
 	case strings.Contains(low, "requires a different python") || strings.Contains(low, "requires-python"):
 		return "environment"
-	case strings.Contains(low, "is not defined") || strings.Contains(low, "is undefined") || strings.Contains(low, "missing environment variable") || strings.Contains(low, "env variable"):
+	case strings.Contains(low, "is not defined") || strings.Contains(low, "is undefined") || strings.Contains(low, "missing environment variable") || strings.Contains(low, "env variable") || strings.Contains(low, " is required"):
 		return "missing-environment"
 	case strings.Contains(low, "failed to collect page data") || strings.Contains(low, "error occurred prerendering") || strings.Contains(low, "build error occurred"):
 		return "nextjs-build"
 	case strings.Contains(low, "failed to solve") || strings.Contains(low, "returned a non-zero code"):
+		return "docker-build"
+	case strings.Contains(low, "unknown instruction") || strings.Contains(low, "dockerfile") && strings.Contains(low, "parse"):
 		return "docker-build"
 	case strings.Contains(low, "connection refused") || strings.Contains(low, "could not connect"):
 		return "runtime"
@@ -227,13 +260,16 @@ func categorize(errorLine string, lines []string) string {
 		if strings.Contains(ll, "failed to collect page data") || strings.Contains(ll, "error occurred prerendering") {
 			return "nextjs-build"
 		}
-		if strings.Contains(ll, "is not defined") || strings.Contains(ll, "missing environment variable") {
+		if strings.Contains(ll, "is not defined") || strings.Contains(ll, "missing environment variable") || strings.Contains(ll, " is required") {
 			return "missing-environment"
 		}
 		if strings.Contains(ll, "copy") && (strings.Contains(ll, "not found") || strings.Contains(ll, "checksum")) {
 			return "configuration"
 		}
 		if strings.Contains(ll, "error ts") {
+			return "compilation"
+		}
+		if strings.Contains(ll, "rollup") || strings.Contains(ll, "vite") || strings.Contains(ll, "esbuild") || strings.Contains(ll, "failed to resolve import") {
 			return "compilation"
 		}
 	}

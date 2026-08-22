@@ -1,0 +1,9 @@
+{
+  "name": "yoink-llm-healing-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "node build-check.js",
+    "start": "node server.js"
+  }
+}

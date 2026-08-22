@@ -97,6 +97,9 @@ func (r *FinalReport) Render() string {
 		b.WriteString("\nConfiguration required:\n\n")
 		for _, req := range r.RequiredEnvVars {
 			label := req.Name
+			if req.ServiceID != "" {
+				label = req.ServiceID + ": " + label
+			}
 			if req.Secret {
 				label += "    (secret)"
 			} else {
@@ -112,6 +115,9 @@ func (r *FinalReport) Render() string {
 				label += " [provider: " + req.Provider + "]"
 			}
 			fmt.Fprintf(&b, "  %s\n", label)
+			for _, evidence := range req.Evidence {
+				fmt.Fprintf(&b, "    evidence: %s\n", evidence)
+			}
 		}
 		b.WriteString("\nThese values cannot safely be inferred from the repository.\n")
 		fmt.Fprintf(&b, "\nRun:\n  yoink env %s\n\nThen:\n  yoink up %s\n", r.ProjectName, r.ProjectName)
@@ -169,7 +175,7 @@ func determineFinalState(success bool, failure *healer.Failure, envReqs []EnvReq
 	// If there are required env vars that are secrets and unavailable,
 	// this is a configuration requirement, not a failure.
 	for _, req := range envReqs {
-		if req.Secret && !req.SafePlaceholder {
+		if req.Status == "REQUIRED" {
 			return StateConfigRequired
 		}
 	}
@@ -179,7 +185,9 @@ func determineFinalState(success bool, failure *healer.Failure, envReqs []EnvReq
 	if failure != nil {
 		switch failure.Category {
 		case "missing-environment":
-			return StateConfigRequired
+			if len(failure.EnvRefs) > 0 {
+				return StateConfigRequired
+			}
 		case "nextjs-build":
 			// Next.js build failures are often env-related. Check if any
 			// env refs point to secrets.

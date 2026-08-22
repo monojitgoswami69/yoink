@@ -16,6 +16,7 @@ import (
 type ContextPack struct {
 	Service          detector.Service
 	Failure          Failure
+	RawLog           string
 	Dockerfile       string
 	Compose          string
 	RelevantFiles    []FileEntry
@@ -46,6 +47,7 @@ func BuildContextPack(svc detector.Service, failure Failure, dockerfile, compose
 	pack := &ContextPack{
 		Service:          svc,
 		Failure:          failure,
+		RawLog:           failure.RawLog,
 		Dockerfile:       dockerfile,
 		Compose:          compose,
 		PreviousAttempts: previous,
@@ -197,6 +199,9 @@ func (p *ContextPack) Render() string {
 
 	// 4. Relevant log excerpt.
 	fmt.Fprintf(&b, "\nRELEVANT BUILD LOG:\n%s\n", f.RelevantLog)
+	if p.RawLog != "" {
+		fmt.Fprintf(&b, "\nCOMPLETE RAW BUILD LOG:\n%s\n", p.RawLog)
+	}
 
 	// 5. Current Dockerfile.
 	fmt.Fprintf(&b, "\nCURRENT DOCKERFILE:\n%s\n", p.Dockerfile)

@@ -87,6 +87,15 @@ type EnvVar struct {
 	// (e.g. in Next.js getStaticProps, generateStaticParams, generateMetadata,
 	// or top-level server component code). Conservative: false = unknown.
 	BuildTime bool `json:"build_time,omitempty"`
+	// Status is an evidence-based requirement classification. Static discovery
+	// alone produces UNKNOWN; runtime/build evidence can promote a variable to
+	// REQUIRED without treating every template entry as mandatory.
+	Status string `json:"status,omitempty"`
+	// Value is populated only for repository-provided non-secret templates.
+	Value       string   `json:"value,omitempty"`
+	Provided    bool     `json:"provided,omitempty"`
+	Placeholder bool     `json:"placeholder,omitempty"`
+	Evidence    []string `json:"evidence,omitempty"`
 }
 
 // Detect scans each service's directory for env-var references.
@@ -113,16 +122,26 @@ func Detect(rootDir string, services []detector.Service) []Result {
 		}
 		// Classify each variable: public/private/secret, build-time/runtime.
 		classifyVars(r.Vars, serviceDir, svc.Framework, svc.Language)
+		applyTemplateMetadata(r.Vars, serviceDir)
 		results = append(results, r)
 	}
 	return results
 }
+
+const (
+	StatusProvidedDefault = "PROVIDED_DEFAULT"
+	StatusRequired        = "REQUIRED"
+	StatusOptional        = "OPTIONAL"
+	StatusFeatureSpecific = "FEATURE_SPECIFIC"
+	StatusUnknown         = "UNKNOWN"
+)
 
 // classifyVars enriches each EnvVar with classification and build-time
 // assessment based on the variable name and its usage context.
 func classifyVars(vars []EnvVar, serviceDir, framework, language string) {
 	for i := range vars {
 		v := &vars[i]
+		v.Status = StatusUnknown
 		// Classification by name.
 		upper := strings.ToUpper(v.Name)
 		switch {
@@ -139,6 +158,56 @@ func classifyVars(vars []EnvVar, serviceDir, framework, language string) {
 			v.BuildTime = assessBuildTime(v, serviceDir, framework)
 		}
 	}
+}
+
+// applyTemplateMetadata attaches safe repository-provided values to detected
+// variables. Real .env files are read only for names; their values are never
+// copied into generated output or exposed in diagnostics.
+func applyTemplateMetadata(vars []EnvVar, serviceDir string) {
+	values := map[string]string{}
+	for _, name := range []string{".env.example", ".env.sample", ".env.template", ".env.local.example"} {
+		readEnvAssignments(filepath.Join(serviceDir, name), values)
+	}
+	for i := range vars {
+		v := &vars[i]
+		if value, ok := values[v.Name]; ok && strings.TrimSpace(value) != "" {
+			v.Provided = true
+			v.Value = value
+			v.Status = StatusProvidedDefault
+			v.Placeholder = obviousPlaceholder(value)
+			v.Evidence = append(v.Evidence, "repository template provides a value")
+		}
+	}
+}
+
+func readEnvAssignments(path string, values map[string]string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if ok && strings.TrimSpace(key) != "" {
+			values[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(value), "\"'")
+		}
+	}
+}
+
+func obviousPlaceholder(value string) bool {
+	low := strings.ToLower(strings.TrimSpace(value))
+	if low == "" {
+		return false
+	}
+	for _, marker := range []string{"placeholder", "your-", "change-me", "example", "dummy", "test", "xxx", "your_"} {
+		if strings.Contains(low, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // isSecretName checks if the variable name looks like a secret.
@@ -318,6 +387,72 @@ func existingEnvContent(dir string) string {
 		}
 	}
 	return ""
+}
+
+// MergeProvidedValues keeps non-empty repository template assignments when a
+// later semantic/template rewrite omits them or leaves them blank.
+func MergeProvidedValues(original, proposed string) string {
+	if strings.TrimSpace(original) == "" || strings.TrimSpace(proposed) == "" {
+		return proposed
+	}
+	values := map[string]string{}
+	readEnvAssignmentsFromContent(original, values)
+	var b strings.Builder
+	for i, line := range strings.Split(proposed, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if key, value, ok := strings.Cut(trimmed, "="); ok {
+			key = strings.TrimSpace(key)
+			if strings.TrimSpace(value) == "" && values[key] != "" {
+				line = key + "=" + values[key]
+			}
+		}
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
+// EnsureCommonVars preserves repository templates while adding only missing
+// technology defaults needed by deterministic infra/generation inference.
+func EnsureCommonVars(existing string, vars []EnvVar, technology string) string {
+	if strings.TrimSpace(existing) == "" {
+		return GenerateEnvExample(vars, technology)
+	}
+	have := map[string]bool{}
+	for _, line := range strings.Split(existing, "\n") {
+		if key, _, ok := strings.Cut(strings.TrimSpace(line), "="); ok {
+			have[strings.TrimSpace(key)] = true
+		}
+	}
+	generated := GenerateEnvExample(nil, technology)
+	var missing []string
+	for _, line := range strings.Split(generated, "\n") {
+		line = strings.TrimSpace(line)
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || strings.HasPrefix(line, "#") || have[strings.TrimSpace(key)] {
+			continue
+		}
+		missing = append(missing, strings.TrimSpace(key)+"="+value)
+	}
+	if len(missing) == 0 {
+		return existing
+	}
+	return strings.TrimRight(existing, "\n") + "\n\n# Yoink technology defaults\n" + strings.Join(missing, "\n") + "\n"
+}
+
+func readEnvAssignmentsFromContent(content string, values map[string]string) {
+	for _, line := range strings.Split(content, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if ok && strings.TrimSpace(key) != "" && strings.TrimSpace(value) != "" {
+			values[strings.TrimSpace(key)] = strings.Trim(strings.TrimSpace(value), "\"'")
+		}
+	}
 }
 
 func contains(haystack []string, needle string) bool {

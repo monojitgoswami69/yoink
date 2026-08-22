@@ -17,8 +17,8 @@ func TestDetermineFinalStateConfigRequired(t *testing.T) {
 		EnvRefs:  []string{}, // no specific variable named in error
 	}
 	envReqs := []EnvRequirement{
-		{Name: "UPSTASH_REDIS_REST_TOKEN", Secret: true, SafePlaceholder: false},
-		{Name: "GEMINI_API_KEY", Secret: true, SafePlaceholder: false},
+		{Name: "UPSTASH_REDIS_REST_TOKEN", Secret: true, SafePlaceholder: false, Status: "REQUIRED"},
+		{Name: "GEMINI_API_KEY", Secret: true, SafePlaceholder: false, Status: "REQUIRED"},
 	}
 	state := determineFinalState(false, failure, envReqs)
 	if state != StateConfigRequired {
@@ -56,6 +56,32 @@ func TestDetermineFinalStateMissingEnv(t *testing.T) {
 	}
 }
 
+func TestDetermineFinalStateGenericConfigurationDoesNotGuess(t *testing.T) {
+	failure := &healer.Failure{Category: "configuration", Error: "environment configuration required"}
+	if got := determineFinalState(false, failure, nil); got != StateBlocked {
+		t.Fatalf("generic unlocated configuration should not guess required vars: %s", got)
+	}
+}
+
+func TestDetermineFinalStateOnlyRequiredFindingsBlock(t *testing.T) {
+	failure := &healer.Failure{Category: "runtime", Error: "worker failed"}
+	reqs := []EnvRequirement{
+		{Name: "WORKER_SECRET", Secret: true, Status: "UNKNOWN"},
+		{Name: "DATABASE_URL", Status: "REQUIRED", Evidence: []string{"startup validation"}},
+	}
+	if got := determineFinalState(false, failure, reqs); got != StateConfigRequired {
+		t.Fatalf("explicit required finding should block: %s", got)
+	}
+}
+
+func TestWorkerRequirementDoesNotBecomeFrontendRequirement(t *testing.T) {
+	ag := &Agent{State: &AgentState{Services: []detector.Service{{ID: "frontend"}, {ID: "worker"}}, ToolHistory: []ToolCall{{Tool: "read_file"}}}}
+	ag.applyEnvironmentFindings([]EnvironmentFinding{{ServiceID: "worker", Name: "WORKER_SECRET", Status: "REQUIRED", Phase: "runtime", Evidence: []string{"worker startup validation"}}})
+	if len(ag.State.EnvReqs) != 1 || ag.State.EnvReqs[0].Name != "WORKER_SECRET" {
+		t.Fatalf("unexpected worker requirement state: %+v", ag.State.EnvReqs)
+	}
+}
+
 func TestFinalReportRenderConfigRequired(t *testing.T) {
 	report := &FinalReport{
 		State:              StateConfigRequired,
@@ -63,8 +89,8 @@ func TestFinalReportRenderConfigRequired(t *testing.T) {
 		DetectedFrameworks: []string{"next"},
 		ServicesTotal:      1,
 		RequiredEnvVars: []EnvRequirement{
-			{Name: "UPSTASH_REDIS_REST_TOKEN", Secret: true, Phase: "build"},
-			{Name: "GEMINI_API_KEY", Secret: true, Phase: "build"},
+			{Name: "UPSTASH_REDIS_REST_TOKEN", Secret: true, Phase: "build", Status: "REQUIRED"},
+			{Name: "GEMINI_API_KEY", Secret: true, Phase: "build", Status: "REQUIRED"},
 			{Name: "NEXT_PUBLIC_SITE_URL", Secret: false, Phase: "build"},
 		},
 	}
@@ -102,7 +128,7 @@ func TestFinalReportRenderSuccess(t *testing.T) {
 	}
 }
 
-func TestCollectEnvRequirementsFromBuildEnv(t *testing.T) {
+func TestCollectEnvRequirementsDoesNotGuessFromBuildEnv(t *testing.T) {
 	svc := detector.Service{
 		ID:        "s1",
 		Framework: "next",
@@ -124,34 +150,10 @@ func TestCollectEnvRequirementsFromBuildEnv(t *testing.T) {
 		},
 	}
 	ag.collectEnvRequirements()
-	// Should include the two secrets (empty + secret) but not PORT/NODE_ENV.
-	foundToken := false
-	foundGeminiKey := false
-	foundPort := false
-	for _, req := range ag.State.EnvReqs {
-		switch req.Name {
-		case "UPSTASH_REDIS_REST_TOKEN":
-			foundToken = true
-			if !req.Secret {
-				t.Error("UPSTASH_REDIS_REST_TOKEN should be secret")
-			}
-		case "GEMINI_API_KEY":
-			foundGeminiKey = true
-			if !req.Secret {
-				t.Error("GEMINI_API_KEY should be secret")
-			}
-		case "PORT":
-			foundPort = true
-		}
-	}
-	if !foundToken {
-		t.Error("should include UPSTASH_REDIS_REST_TOKEN")
-	}
-	if !foundGeminiKey {
-		t.Error("should include GEMINI_API_KEY")
-	}
-	if foundPort {
-		t.Error("should NOT include PORT (non-secret with value)")
+	// Static build env candidates alone are insufficient evidence. The runtime
+	// error must name the required variable before it is reported.
+	if len(ag.State.EnvReqs) != 0 {
+		t.Fatalf("unexpected guessed environment requirements: %+v", ag.State.EnvReqs)
 	}
 }
 

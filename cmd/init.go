@@ -239,9 +239,7 @@ func runInit(cmd *cobra.Command, repoURL string) error {
 	// (modern apps use pydantic-settings field names, not os.getenv) or the
 	// LLM enhancement failed/timed out.
 	for i, r := range envResults {
-		if strings.TrimSpace(r.EnvContent) == "" {
-			envResults[i].EnvContent = envvar.GenerateEnvExample(r.Vars, r.Technology)
-		}
+		envResults[i].EnvContent = envvar.EnsureCommonVars(r.EnvContent, r.Vars, r.Technology)
 	}
 
 	// Step 5: infrastructure inference.
@@ -318,6 +316,12 @@ func runInit(cmd *cobra.Command, repoURL string) error {
 	if !io.quiet {
 		for _, name := range generator.SortedFilenames(out.Files) {
 			io.success("  " + initOutputDir + "/" + name)
+		}
+	}
+	if configured, placeholders := envSummary(envResults); configured > 0 {
+		io.info(fmt.Sprintf("Environment configured automatically: %d repository-provided value(s), %d placeholder(s)", configured, placeholders))
+		if placeholders > 0 {
+			io.info("Some repository values are placeholders or development defaults; replace them for full feature functionality.")
 		}
 	}
 
@@ -398,6 +402,20 @@ func runInit(cmd *cobra.Command, repoURL string) error {
 		return initStateError{state: state, code: code, message: "initialization did not reach a verified running state"}
 	}
 	return nil
+}
+
+func envSummary(results []envvar.Result) (configured, placeholders int) {
+	for _, result := range results {
+		for _, value := range result.Vars {
+			if value.Status == envvar.StatusProvidedDefault {
+				configured++
+				if value.Placeholder {
+					placeholders++
+				}
+			}
+		}
+	}
+	return configured, placeholders
 }
 
 func existingDockerConfig(root string) []string {

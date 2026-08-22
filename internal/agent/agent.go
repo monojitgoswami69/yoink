@@ -41,6 +41,7 @@ import (
 
 	"yoink/internal/detector"
 	"yoink/internal/docker"
+	"yoink/internal/envvar"
 	"yoink/internal/generator"
 	"yoink/internal/healer"
 	"yoink/internal/llm"
@@ -110,12 +111,23 @@ type AgentState struct {
 
 // EnvRequirement captures a discovered environment variable requirement.
 type EnvRequirement struct {
-	Name            string `json:"name"`
-	Phase           string `json:"phase"` // build | runtime | unknown
-	Secret          bool   `json:"secret"`
-	Provider        string `json:"provider,omitempty"`
-	Source          string `json:"source"`
-	SafePlaceholder bool   `json:"safe_placeholder"`
+	ServiceID       string   `json:"service_id"`
+	Name            string   `json:"name"`
+	Phase           string   `json:"phase"` // build | runtime | unknown
+	Secret          bool     `json:"secret"`
+	Provider        string   `json:"provider,omitempty"`
+	Source          string   `json:"source"`
+	SafePlaceholder bool     `json:"safe_placeholder"`
+	Status          string   `json:"status"`
+	Evidence        []string `json:"evidence,omitempty"`
+}
+
+type EnvironmentFinding struct {
+	ServiceID string   `json:"service_id"`
+	Name      string   `json:"name"`
+	Status    string   `json:"status"`
+	Phase     string   `json:"phase"`
+	Evidence  []string `json:"evidence"`
 }
 
 // PatchRecord records an applied patch for provenance.
@@ -298,6 +310,7 @@ func (a *Agent) collectEnvRequirements() {
 		return
 	}
 	seen := map[string]bool{}
+	serviceID := a.State.CurrentFailure.Service
 
 	// From failure EnvRefs (high confidence — the build error named them).
 	for _, name := range a.State.CurrentFailure.EnvRefs {
@@ -306,9 +319,12 @@ func (a *Agent) collectEnvRequirements() {
 		}
 		seen[name] = true
 		req := EnvRequirement{
-			Name:   name,
-			Phase:  "build",
-			Source: "build error: " + a.State.CurrentFailure.Error,
+			ServiceID: serviceID,
+			Name:      name,
+			Phase:     "build",
+			Source:    "build error: " + a.State.CurrentFailure.Error,
+			Status:    envvar.StatusRequired,
+			Evidence:  []string{"runtime/build output explicitly names this variable"},
 		}
 		upper := strings.ToUpper(name)
 		req.Secret = isSecretName(upper)
@@ -316,33 +332,9 @@ func (a *Agent) collectEnvRequirements() {
 		a.State.EnvReqs = append(a.State.EnvReqs, req)
 	}
 
-	// From BuildEnv (the env vars injected into the Dockerfile as placeholders).
-	// For nextjs-build failures, these are the likely culprits.
-	if a.State.CurrentFailure.Category == "nextjs-build" || a.State.CurrentFailure.Category == "missing-environment" {
-		for _, svc := range a.State.Services {
-			for name, value := range svc.BuildEnv {
-				if seen[name] {
-					continue
-				}
-				seen[name] = true
-				upper := strings.ToUpper(name)
-				isSecret := isSecretName(upper)
-				// Only report env vars that are secrets or have empty values
-				// (those are the ones the user needs to configure).
-				if !isSecret && value != "" && value != "yoink-build-placeholder" {
-					continue
-				}
-				req := EnvRequirement{
-					Name:            name,
-					Phase:           "build",
-					Secret:          isSecret,
-					SafePlaceholder: !isSecret,
-					Source:          "build-time env injection",
-				}
-				a.State.EnvReqs = append(a.State.EnvReqs, req)
-			}
-		}
-	}
+	// Do not promote every secret in BuildEnv after a generic framework error.
+	// Only explicit failure references are REQUIRED here; the complete candidate
+	// inventory is supplied to the agent for semantic investigation instead.
 }
 
 // buildFinalReport constructs the structured terminal report.
@@ -562,6 +554,7 @@ func (a *Agent) agentIteration(ctx context.Context) (bool, error) {
 		// the evidence it just requested instead of receiving decorative tools.
 		userPrompt += toolResults.String() + "\n\nNow continue the diagnosis. Do not repeat a tool request whose result is already shown."
 	}
+	a.applyEnvironmentFindings(resp.EnvironmentFindings)
 
 	// Handle patch proposals.
 	if len(resp.Changes) > 0 {
@@ -633,15 +626,47 @@ func (a *Agent) agentIteration(ctx context.Context) (bool, error) {
 
 // agentResponse is the JSON schema the LLM returns.
 type agentResponse struct {
-	Thinking   string          `json:"thinking,omitempty"`
-	ToolCalls  []toolCallReq   `json:"tool_calls,omitempty"`
-	Changes    []healer.Change `json:"changes,omitempty"`
-	Dockerfile string          `json:"dockerfile,omitempty"`
-	Compose    string          `json:"compose,omitempty"`
-	Service    string          `json:"service,omitempty"`
-	Summary    string          `json:"summary,omitempty"`
-	Done       bool            `json:"done,omitempty"`
-	Unfixable  bool            `json:"unfixable,omitempty"`
+	Thinking            string               `json:"thinking,omitempty"`
+	ToolCalls           []toolCallReq        `json:"tool_calls,omitempty"`
+	Changes             []healer.Change      `json:"changes,omitempty"`
+	Dockerfile          string               `json:"dockerfile,omitempty"`
+	Compose             string               `json:"compose,omitempty"`
+	Service             string               `json:"service,omitempty"`
+	Summary             string               `json:"summary,omitempty"`
+	Done                bool                 `json:"done,omitempty"`
+	Unfixable           bool                 `json:"unfixable,omitempty"`
+	EnvironmentFindings []EnvironmentFinding `json:"environment_findings,omitempty"`
+}
+
+func (a *Agent) applyEnvironmentFindings(findings []EnvironmentFinding) {
+	inspected := false
+	for _, call := range a.State.ToolHistory {
+		if call.Tool == "read_file" || call.Tool == "search" {
+			inspected = true
+			break
+		}
+	}
+	for _, finding := range findings {
+		if finding.Status != envvar.StatusRequired || finding.Name == "" || len(finding.Evidence) == 0 || !inspected {
+			continue
+		}
+		validService := false
+		for _, svc := range a.State.Services {
+			if finding.ServiceID == "" || svc.ID == finding.ServiceID {
+				validService = true
+				break
+			}
+		}
+		if !validService {
+			continue
+		}
+		secret := isSecretName(strings.ToUpper(finding.Name))
+		a.State.EnvReqs = append(a.State.EnvReqs, EnvRequirement{
+			ServiceID: finding.ServiceID, Name: finding.Name, Phase: finding.Phase, Secret: secret,
+			SafePlaceholder: !secret, Status: finding.Status,
+			Source: "agent semantic investigation", Evidence: finding.Evidence,
+		})
+	}
 }
 
 // toolCallReq is a tool call request from the LLM.
@@ -1115,6 +1140,19 @@ func (a *Agent) buildContextPrompt() string {
 		}
 		fmt.Fprintf(&b, "  Progression: %s\n", f.Progression)
 		fmt.Fprintf(&b, "\nRELEVANT LOG:\n%s\n", f.RelevantLog)
+		if f.RawLog != "" {
+			fmt.Fprintf(&b, "\nCOMPLETE RAW BUILD LOG:\n%s\n", f.RawLog)
+		}
+	}
+	b.WriteString("\nENVIRONMENT CANDIDATES (static evidence only; do not treat UNKNOWN as required):\n")
+	for _, svc := range a.State.Services {
+		for name, value := range svc.BuildEnv {
+			status := "UNKNOWN"
+			if value != "" && value != "yoink-build-placeholder" {
+				status = "PROVIDED_DEFAULT"
+			}
+			fmt.Fprintf(&b, "  %s=%s [%s, service=%s]\n", name, redactEnvValue(name, value), status, svc.ID)
+		}
 	}
 
 	// Current Dockerfile.
@@ -1135,6 +1173,14 @@ func (a *Agent) buildContextPrompt() string {
 		svc := detector.Service{}
 		if len(a.State.Services) > 0 {
 			svc = a.State.Services[0]
+			if selected := a.resolveService(); selected != "" {
+				for _, candidate := range a.State.Services {
+					if candidate.ID == selected {
+						svc = candidate
+						break
+					}
+				}
+			}
 		}
 		pack := healer.BuildContextPack(svc, *a.State.CurrentFailure,
 			a.State.Generated.Files[dfKey], a.State.Generated.Files["docker-compose.yml"],
@@ -1169,8 +1215,15 @@ func (a *Agent) buildContextPrompt() string {
 	}
 
 	b.WriteString("\nAvailable tools: read_file(path, offset, limit), search(pattern, path), list_tree(path, depth), build(), get_logs(service, tail), check_health()\n")
-	b.WriteString("\nRespond with JSON: {\"thinking\": \"...\", \"tool_calls\": [...], \"changes\": [...], \"summary\": \"...\", \"done\": true/false, \"unfixable\": true/false}\n")
+	b.WriteString("\nRespond with JSON: {\"thinking\": \"...\", \"tool_calls\": [...], \"environment_findings\": [{\"service_id\":\"service-1\",\"name\":\"DATABASE_URL\",\"status\":\"REQUIRED|OPTIONAL|FEATURE_SPECIFIC|UNKNOWN\",\"phase\":\"build|runtime|feature\",\"evidence\":[\"...\"]}], \"changes\": [...], \"summary\": \"...\", \"done\": true/false, \"unfixable\": true/false}\n")
 	return b.String()
+}
+
+func redactEnvValue(name, value string) string {
+	if isSecretName(strings.ToUpper(name)) && value != "" {
+		return "<redacted>"
+	}
+	return value
 }
 
 func hashString(s string) string {
@@ -1204,10 +1257,28 @@ RULES:
 11. Do not repeat a failed strategy without new evidence.
 12. When blocked by real secrets, report exactly what the user must configure.
 
+ENVIRONMENT VARIABLE INVESTIGATION:
+The ENVIRONMENT CANDIDATES section lists statically discovered variables. A variable appearing there is NOT proof it is required. You MUST investigate the source code to determine actual requiredness before reporting environment_findings.
+
+Use read_file and search tools to inspect where each candidate variable is actually consumed. Look for:
+
+- JavaScript/TypeScript: process.env.X, import.meta.env.X, if (!process.env.X) throw, config modules that validate at startup, Zod/Joi/Yup schemas, Next.js server-only vs client-side usage, Vite build-time vs runtime usage.
+- Python: os.environ["X"], os.getenv("X"), os.getenv("X", default), pydantic BaseSettings fields (required vs has default), FastAPI lifespan/startup validation, explicit raise if missing.
+- Any language: startup initialization code that reads the variable, conditional/guarded usage (optional), feature/route-specific usage (feature-specific), build-time-only access.
+
+Classify each investigated variable as:
+- REQUIRED: absence demonstrably prevents the service from building or starting (startup validation, unconditional access without default, explicit error).
+- OPTIONAL: a default exists or the variable is guarded by a conditional.
+- FEATURE_SPECIFIC: only accessed by a non-core route/feature/integration path, not during startup.
+- UNKNOWN: insufficient evidence to classify.
+
+Only report REQUIRED findings in environment_findings, and only with concrete evidence (source file, what the code does, why absence is fatal). Do NOT report every candidate as REQUIRED. Do NOT block deployment for OPTIONAL or FEATURE_SPECIFIC variables.
+
 RESPONSE FORMAT (JSON only, no markdown):
 {
   "thinking": "your reasoning",
   "tool_calls": [{"tool": "read_file", "args": {"path": "...", "offset": 0, "limit": 50}}],
+  "environment_findings": [{"service_id": "service-1", "name": "DATABASE_URL", "status": "REQUIRED", "phase": "runtime", "evidence": ["config.py line 12: Settings(BaseSettings) declares DATABASE_URL: str with no default, instantiated at startup"]}],
   "changes": [{"file": "Dockerfile.service-1", "operation": "insert_after", "anchor": "...", "content": "...", "reason": "..."}],
   "summary": "one-line explanation",
   "done": false,

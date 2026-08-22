@@ -68,6 +68,7 @@ type Attempt struct {
 	Service  string        `json:"service,omitempty"`
 	Summary  string        `json:"summary,omitempty"`
 	LogTail  string        `json:"log_tail,omitempty"`
+	RawLog   string        `json:"raw_log,omitempty"`
 	Duration time.Duration `json:"duration"`
 }
 
@@ -130,6 +131,7 @@ func (l *Loop) Run(ctx context.Context) (*Result, error) {
 		}
 
 		attempt.Status = StatusBuildErr
+		attempt.RawLog = buildOut
 		attempt.LogTail = docker.TailLines(buildOut, 80)
 		attempt.Service = docker.ExtractFailedService(buildOut)
 
@@ -169,7 +171,7 @@ func (l *Loop) Run(ctx context.Context) (*Result, error) {
 		// and are the highest-confidence repairs (Phase 11 boundary:
 		// deterministic before agentic). If one applies, rebuild and verify;
 		// only when no deterministic fix applies do we need the LLM.
-		if fixed, summary, ok := deterministicFix(attempt.LogTail, failingDockerfile, attempt.Service); ok {
+		if fixed, summary, ok := deterministicFix(buildOut, failingDockerfile, attempt.Service); ok {
 			attempt.Status = StatusFixed
 			attempt.Summary = summary
 			cleaned := llm.CleanContent(fixed)

@@ -133,6 +133,49 @@ func TestDetectPreservesExistingEnvTemplateValues(t *testing.T) {
 	if len(results) != 1 || !strings.Contains(results[0].EnvContent, "TWILIO_ENABLED=false") || !strings.Contains(results[0].EnvContent, "SMTP_PORT=587") {
 		t.Fatalf("existing template values were not preserved: %+v", results)
 	}
+	for _, v := range results[0].Vars {
+		if v.Name == "TWILIO_ENABLED" && (v.Status != StatusProvidedDefault || v.Value != "false") {
+			t.Fatalf("provided default metadata missing: %+v", v)
+		}
+	}
+}
+
+func TestTemplatePlaceholderMetadataDoesNotBecomeRequired(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, ".env.example"), "GEMINI_API_KEY=placeholder-key-here\nPORT=3000\nOPTIONAL=\n")
+	writeFile(t, filepath.Join(root, "app.js"), "process.env.GEMINI_API_KEY; process.env.PORT; process.env.OPTIONAL")
+	result := Detect(root, []detector.Service{{ID: "service-1", Language: "javascript", Framework: "node", Type: "backend"}})[0]
+	for _, v := range result.Vars {
+		switch v.Name {
+		case "GEMINI_API_KEY":
+			if v.Status != StatusProvidedDefault || !v.Placeholder || v.Value != "placeholder-key-here" {
+				t.Fatalf("placeholder metadata incorrect: %+v", v)
+			}
+		case "PORT":
+			if v.Status != StatusProvidedDefault || v.Value != "3000" {
+				t.Fatalf("normal default metadata incorrect: %+v", v)
+			}
+		case "OPTIONAL":
+			if v.Status != StatusUnknown {
+				t.Fatalf("empty template value should remain unknown: %+v", v)
+			}
+		}
+	}
+}
+
+func TestMergeProvidedValuesPreservesNonEmptyDefaults(t *testing.T) {
+	got := MergeProvidedValues("PORT=3000\nDEBUG=false\nSECRET_KEY=\n", "PORT=\nDEBUG=\nSECRET_KEY=\n")
+	want := "PORT=3000\nDEBUG=false\nSECRET_KEY=\n"
+	if got != want {
+		t.Fatalf("merged values mismatch: want %q got %q", want, got)
+	}
+}
+
+func TestEnsureCommonVarsPreservesTemplateAndAddsMissingDefaults(t *testing.T) {
+	got := EnsureCommonVars("TWILIO_ENABLED=false\n", nil, "fastapi")
+	if !strings.Contains(got, "TWILIO_ENABLED=false") || !strings.Contains(got, "DATABASE_URL=") {
+		t.Fatalf("expected preserved template and database default, got:\n%s", got)
+	}
 }
 
 func TestCommonVarsDoNotDuplicate(t *testing.T) {
