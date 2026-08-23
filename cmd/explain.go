@@ -225,7 +225,7 @@ func requiredEnvRows(services []detector.Service) []envReqRow {
 				class = "secret"
 			}
 			// Only report as required if the value is genuinely missing.
-			if val != "" && val != "yoink-build-placeholder" {
+			if val != "" && val != "yoink-build-placeholder" && !isLikelyPlaceholder(val) {
 				continue
 			}
 			seen[name] = true
@@ -241,6 +241,18 @@ func isSecretEnvName(name string) bool {
 	up := strings.ToUpper(name)
 	for _, frag := range []string{"SECRET", "PASSWORD", "TOKEN", "CREDENTIAL", "PRIVATE_KEY", "API_KEY"} {
 		if strings.Contains(up, frag) {
+			return true
+		}
+	}
+	return false
+}
+
+// isLikelyPlaceholder checks if a value looks like a placeholder rather than
+// a real credential or configuration value.
+func isLikelyPlaceholder(val string) bool {
+	low := strings.ToLower(strings.TrimSpace(val))
+	for _, marker := range []string{"placeholder", "your-", "change-me", "change me", "example", "dummy", "test", "xxx", "your_", "todo", "<insert", "replace", "sample"} {
+		if strings.Contains(low, marker) {
 			return true
 		}
 	}

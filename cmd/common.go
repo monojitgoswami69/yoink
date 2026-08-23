@@ -33,13 +33,15 @@ func plural(n int, noun string) string {
 	return fmt.Sprintf("%d %ss", n, noun)
 }
 
-// readFileFromDisk reads a file from the given directory. Returns "" on error.
-func readFileFromDisk(dir, filename string) string {
+// readFileFromDiskSafe reads a file from the given directory. Returns the
+// content and true on success, or "" and false on error. Callers must check
+// the bool to avoid writing empty content over an existing file.
+func readFileFromDiskSafe(dir, filename string) (string, bool) {
 	data, err := os.ReadFile(filepath.Join(dir, filename))
 	if err != nil {
-		return ""
+		return "", false
 	}
-	return string(data)
+	return string(data), true
 }
 
 func containsStr(haystack []string, needle string) bool {

@@ -46,7 +46,7 @@ if the build fails, and restart the stack.`,
 func runUpdate(cmd *cobra.Command, args []string) error {
 	io := &initIO{verbose: GetVerbose(cmd), quiet: GetQuiet(cmd)}
 	if !io.quiet {
-		fmt.Print(ui.Header(ui.HeaderArgs{Command: "update", Version: Version}))
+		fmt.Print(ui.Header(ui.HeaderArgs{Command: "update", Version: Version}) + "\n\n")
 	}
 	if err := requireDocker(); err != nil {
 		return err
@@ -60,7 +60,7 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if !io.quiet {
-		fmt.Printf("Updating %s...\n\n", ui.HighlightStyle.Render(p.Name))
+		fmt.Printf("Updating %s...\n", ui.HighlightStyle.Render(p.Name))
 	}
 
 	// 1. Pull latest changes.
@@ -104,11 +104,19 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 				case state.ArtifactHealed:
 					io.warn(fmt.Sprintf("Preserving healed %s (healer modification detected). Regenerated version saved as %s.gen.", name, name))
 					_ = os.WriteFile(filepath.Join(p.OutputDir, name+".gen"), []byte(out2.Files[name]), 0644)
-					out2.Files[name] = readFileFromDisk(p.OutputDir, name)
+					if content, ok := readFileFromDiskSafe(p.OutputDir, name); ok {
+						out2.Files[name] = content
+					} else {
+						io.warn(fmt.Sprintf("Could not read existing %s — using regenerated version", name))
+					}
 				case state.ArtifactDiverged:
 					io.warn(fmt.Sprintf("Preserving user-modified %s. Regenerated version saved as %s.gen.", name, name))
 					_ = os.WriteFile(filepath.Join(p.OutputDir, name+".gen"), []byte(out2.Files[name]), 0644)
-					out2.Files[name] = readFileFromDisk(p.OutputDir, name)
+					if content, ok := readFileFromDiskSafe(p.OutputDir, name); ok {
+						out2.Files[name] = content
+					} else {
+						io.warn(fmt.Sprintf("Could not read existing %s — using regenerated version", name))
+					}
 				}
 			}
 		}
@@ -138,7 +146,11 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 		io.warn("Build failed — attempting heal...")
 		// 4.5 Self-heal: run the heal loop on the regenerated output.
 		cfg, cfgErr := config.Load()
-		if cfgErr == nil && cfg.LLMProvider != "" {
+		if cfgErr != nil {
+			io.info("Heal skipped — no LLM configured. Run `yoink setup` to enable healing.")
+		} else if cfg.LLMProvider == "" {
+			io.info("Heal skipped — LLM provider not set. Run `yoink setup` to configure.")
+		} else {
 			client, llmErr := llm.NewClient(cfg.LLMProvider, cfg.LLMModel, cfg.LLMAPIKey)
 			if llmErr == nil {
 				reader, _ := safefs.New(p.Lock.RepoPath)
@@ -151,11 +163,13 @@ func runUpdate(cmd *cobra.Command, args []string) error {
 					Tee: func(line string) { io.info(line) },
 				}
 				healRes, healErr := loop.Run(ctx)
-				if healErr == nil && healRes.Success {
+				if healErr != nil {
+					io.warn(fmt.Sprintf("Heal error: %v", healErr))
+				} else if healRes.Success {
 					io.success("Heal succeeded — build is green")
 					buildErr = nil
-				} else if healRes != nil {
-					io.warn(fmt.Sprintf("Heal: %d attempts, success=%v", len(healRes.Attempts), healRes.Success))
+				} else {
+					io.warn(fmt.Sprintf("Heal: %d attempts, build still failing", len(healRes.Attempts)))
 					if healRes.FinalOutput != "" {
 						fmt.Println(ui.DimStyle.Render(healRes.FinalOutput))
 					}

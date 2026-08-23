@@ -47,7 +47,7 @@ func init() {
 func runHeal(cmd *cobra.Command, args []string) error {
 	io := &initIO{verbose: GetVerbose(cmd), quiet: GetQuiet(cmd)}
 	if !io.quiet {
-		fmt.Print(ui.Header(ui.HeaderArgs{Command: "heal", Version: Version}))
+		fmt.Print(ui.Header(ui.HeaderArgs{Command: "heal", Version: Version}) + "\n\n")
 	}
 	if err := requireDocker(); err != nil {
 		return err
@@ -119,11 +119,13 @@ func runHeal(cmd *cobra.Command, args []string) error {
 	}
 	if res.Success {
 		io.success("Build is green")
+		io.info(fmt.Sprintf("Run `yoink up %s` to start the stack", p.Name))
 	} else {
 		io.warn("Build still failing after heal — see the tail below")
 		if res.FinalOutput != "" {
 			fmt.Println(ui.DimStyle.Render(res.FinalOutput))
 		}
+		io.info(fmt.Sprintf("Run `yoink explain %s` to see what the agent tried", p.Name))
 		return fmt.Errorf("build still failing after %d heal attempt(s)", len(res.Attempts))
 	}
 	return nil

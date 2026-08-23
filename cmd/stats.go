@@ -17,7 +17,7 @@ var statsCmd = &cobra.Command{
 	Use:   "stats <project>",
 	Short: "Show resource usage",
 	Long:  `Show per-service CPU, memory, and network I/O from docker stats.`,
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := runStats(cmd, args); err != nil {
 			fmt.Println(ui.ErrorBox.Render("Error: " + err.Error()))
@@ -31,7 +31,11 @@ func runStats(cmd *cobra.Command, args []string) error {
 	if err := requireDocker(); err != nil {
 		return err
 	}
-	p, err := project.Resolve(args[0])
+	name := ""
+	if len(args) > 0 {
+		name = args[0]
+	}
+	p, err := project.Resolve(name)
 	if err != nil {
 		return err
 	}
@@ -54,7 +58,12 @@ func runStats(cmd *cobra.Command, args []string) error {
 		fmt.Println(ui.MutedStyle.Render("  Run: yoink up " + p.Name))
 		return nil
 	}
-	stats, _ := p.Compose.Stats(ctx)
+	stats, err := p.Compose.Stats(ctx)
+	if err != nil {
+		fmt.Println("\n  " + ui.MutedStyle.Render("Could not retrieve stats."))
+		fmt.Println(ui.DimStyle.Render(fmt.Sprintf("  error: %v", err)))
+		return nil
+	}
 	byName := map[string]docker.Stat{}
 	for _, s := range stats {
 		byName[s.Name] = s

@@ -21,7 +21,7 @@ var doctorCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := runDoctor(cmd); err != nil {
-			fmt.Println(ui.Error(err.Error(), ""))
+			fmt.Println(ui.ErrorBox.Render("Error: " + err.Error()))
 			os.Exit(1)
 		}
 	},
@@ -70,10 +70,12 @@ func runDoctor(cmd *cobra.Command) error {
 	cfg, cfgErr := config.Load()
 	if cfgErr != nil || cfg == nil || cfg.LLMProvider == "" {
 		check(false, "LLM provider", "")
+		fmt.Println(ui.DimStyle.Render("    Run: yoink setup"))
 	} else {
 		check(true, "LLM provider", cfg.LLMProvider)
 		if cfg.LLMAPIKey == "" && cfg.LLMProvider != "ollama" {
 			check(false, "LLM API key", "")
+			fmt.Println(ui.DimStyle.Render("    Run: yoink setup"))
 		} else {
 			check(true, "LLM API key", "")
 		}

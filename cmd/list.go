@@ -19,7 +19,7 @@ var listCmd = &cobra.Command{
 	Args:  cobra.NoArgs,
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := runList(cmd); err != nil {
-			fmt.Println(ui.Error(err.Error(), ""))
+			fmt.Println(ui.ErrorBox.Render("Error: " + err.Error()))
 			os.Exit(1)
 		}
 	},

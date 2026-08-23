@@ -64,7 +64,7 @@ func runSetup() error {
 		return nil
 	}
 
-	fmt.Print(ui.Header(ui.HeaderArgs{Command: "setup", Version: Version}))
+	fmt.Print(ui.Header(ui.HeaderArgs{Command: "setup", Version: Version}) + "\n\n")
 
 	provider, err := pickProvider()
 	if err != nil {

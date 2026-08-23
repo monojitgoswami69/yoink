@@ -65,10 +65,18 @@ func runUp(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
 
-	// Already running? Surface the URL and exit without a rebuild.
+	// Already running? Verify health and surface the URL.
 	if running, _ := p.IsRunning(ctx); running {
 		fmt.Println(ui.ProjectHeader(p.Name, ""))
-		fmt.Println("\n  " + ui.SuccessStyle.Render(ui.SymRun+" Already running"))
+		if !io.quiet {
+			h, _ := p.Health(ctx)
+			if h != nil && h.Overall != "running" {
+				fmt.Println("\n  " + ui.WarningStyle.Render(ui.SymStop+" Running but unhealthy"))
+				printHealthSummary(ctx, p, io)
+			} else {
+				fmt.Println("\n  " + ui.SuccessStyle.Render(ui.SymRun+" Already running"))
+			}
+		}
 		printURLs(ctx, p, io)
 		return nil
 	}
@@ -101,7 +109,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	if !upNoWait {
 		if err := waitForHealthy(ctx, p, io); err != nil {
-			io.warn(err.Error())
+			return err
 		}
 	}
 
@@ -164,7 +172,7 @@ func waitForHealthy(ctx context.Context, p *project.Project, io *initIO) error {
 		}
 		time.Sleep(2 * time.Second)
 	}
-	return fmt.Errorf("timed out waiting for healthchecks — use `yoink dash %s` to inspect", p.Name)
+	return fmt.Errorf("timed out waiting for healthchecks — use `yoink logs %s` or `yoink status %s` to inspect", p.Name, p.Name)
 }
 
 // printHealthSummary renders a per-service health list followed by the overall
@@ -187,7 +195,12 @@ func printHealthSummary(ctx context.Context, p *project.Project, io *initIO) {
 // port map and the live compose state.
 func printURLs(ctx context.Context, p *project.Project, io *initIO) {
 	urls, err := p.URLs(ctx)
-	if err != nil || len(urls) == 0 {
+	if err != nil {
+		io.info("Could not retrieve live URLs (Docker may be unreachable)")
+		return
+	}
+	if len(urls) == 0 {
+		io.info("No public URLs (no services with published ports)")
 		return
 	}
 	fmt.Println()

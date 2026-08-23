@@ -31,7 +31,7 @@ no project is given, the most recently initialised one is used.`,
 func runOpen(cmd *cobra.Command, args []string) error {
 	io := &initIO{verbose: GetVerbose(cmd), quiet: GetQuiet(cmd)}
 	if !io.quiet {
-		fmt.Print(ui.Header(ui.HeaderArgs{Command: "open", Version: Version}))
+		fmt.Print(ui.Header(ui.HeaderArgs{Command: "open", Version: Version}) + "\n\n")
 	}
 	name := ""
 	if len(args) > 0 {
@@ -40,6 +40,17 @@ func runOpen(cmd *cobra.Command, args []string) error {
 	p, err := project.Resolve(name)
 	if err != nil {
 		return err
+	}
+
+	// Check if the project is actually running before opening a browser.
+	if requireDocker() == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if running, _ := p.IsRunning(ctx); !running {
+			fmt.Println(ui.WarningStyle.Render("  ⚠ Project is not running."))
+			fmt.Println(ui.DimStyle.Render("  Run: yoink up " + p.Name))
+			return nil
+		}
 	}
 
 	// Prefer a live URL; fall back to the configured port map so `open`

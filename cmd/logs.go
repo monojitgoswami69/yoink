@@ -12,7 +12,7 @@ import (
 )
 
 var logsCmd = &cobra.Command{
-	Use:   "logs <project> [service]",
+	Use:   "logs [project] [service]",
 	Short: "Show service logs",
 	Long: `Show docker compose logs for a project. Pass a service name to scope to
 one service. Use --follow for a live tail.
@@ -20,7 +20,7 @@ one service. Use --follow for a live tail.
 Flags:
   --follow     Stream logs live (ctrl-C to stop)
   --tail N     Number of lines to show (default 200)`,
-	Args: cobra.MinimumNArgs(1),
+	Args: cobra.MaximumNArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := runLogs(cmd, args); err != nil {
 			fmt.Println(ui.ErrorBox.Render("Error: " + err.Error()))
@@ -44,7 +44,11 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	if err := requireDocker(); err != nil {
 		return err
 	}
-	p, err := project.Resolve(args[0])
+	name := ""
+	if len(args) > 0 {
+		name = args[0]
+	}
+	p, err := project.Resolve(name)
 	if err != nil {
 		return err
 	}
@@ -57,7 +61,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 
 	label := p.Name
 	if service != "" {
-		label = service
+		label = p.Name + "/" + service
 	}
 	if !io.quiet {
 		fmt.Println(ui.ProjectHeader(label, ""))
@@ -69,6 +73,9 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	}
 
 	if logsFollow {
+		if running, _ := p.IsRunning(ctx); !running {
+			io.warn("Project is not running. Showing last logs, waiting for new entries (ctrl-C to exit).")
+		}
 		return p.Compose.Follow(ctx, service, logsTail)
 	}
 

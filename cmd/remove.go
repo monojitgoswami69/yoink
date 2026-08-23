@@ -87,19 +87,31 @@ func runIncinerate(cmd *cobra.Command, args []string) error {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	dockerCleaned := false
 	if requireDocker() == nil {
 		if out, err := p.Compose.Down(ctx, removeVolumes); err != nil {
 			io.warn(fmt.Sprintf("compose down: %s", strings.TrimSpace(out)))
+		} else {
+			dockerCleaned = true
 		}
+	} else {
+		io.warn("Docker unavailable — containers and volumes not removed. Run `docker compose down` manually if needed.")
 	}
 
 	repoPath := p.Lock.RepoPath
 	if repoPath != "" {
-		_ = os.RemoveAll(repoPath)
+		if err := os.RemoveAll(repoPath); err != nil {
+			io.warn(fmt.Sprintf("could not remove repo: %v", err))
+		}
 	}
-	_ = os.RemoveAll(p.Manager.Dir)
+	if err := os.RemoveAll(p.Manager.Dir); err != nil {
+		io.warn(fmt.Sprintf("could not remove project state: %v", err))
+	}
 
 	io.success(fmt.Sprintf("Project %s incinerated.", ui.HighlightStyle.Render(p.Name)))
+	if !dockerCleaned && removeVolumes {
+		io.warn("Volumes were NOT deleted — Docker was unavailable or compose down failed.")
+	}
 	return nil
 }
 

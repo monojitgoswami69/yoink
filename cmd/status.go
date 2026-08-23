@@ -18,7 +18,7 @@ var statusCmd = &cobra.Command{
 	Args:  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := runStatus(cmd, args); err != nil {
-			fmt.Println(ui.Error(err.Error(), ""))
+			fmt.Println(ui.ErrorBox.Render("Error: " + err.Error()))
 			os.Exit(1)
 		}
 	},

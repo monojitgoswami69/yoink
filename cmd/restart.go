@@ -31,7 +31,7 @@ running down then up because it keeps the network/volumes intact.`,
 func runRestart(cmd *cobra.Command, args []string) error {
 	io := &initIO{verbose: GetVerbose(cmd), quiet: GetQuiet(cmd)}
 	if !io.quiet {
-		fmt.Print(ui.Header(ui.HeaderArgs{Command: "restart", Version: Version}))
+		fmt.Print(ui.Header(ui.HeaderArgs{Command: "restart", Version: Version}) + "\n\n")
 	}
 	if err := requireDocker(); err != nil {
 		return err
@@ -45,13 +45,13 @@ func runRestart(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	if !io.quiet {
-		fmt.Printf("Restarting %s...\n\n", ui.HighlightStyle.Render(p.Name))
+		fmt.Printf("Restarting %s...\n", ui.HighlightStyle.Render(p.Name))
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
 	if out, err := p.Compose.Down(ctx, false); err != nil {
-		return fmt.Errorf("compose down failed: %s", strings.TrimSpace(out))
+		return fmt.Errorf("compose down failed: %w: %s", err, strings.TrimSpace(out))
 	}
 	if err := renderMergedEnvs(p.Manager, p.Lock, io); err != nil {
 		return err
@@ -61,10 +61,10 @@ func runRestart(cmd *cobra.Command, args []string) error {
 		fmt.Println(ui.DimStyle.Render(strings.TrimRight(out, "\n")))
 	}
 	if err != nil {
-		return fmt.Errorf("compose up failed: %s", docker.TailLines(out, 30))
+		return fmt.Errorf("compose up failed: %s\n\nrun `yoink logs %s` or `yoink heal %s`", docker.TailLines(out, 30), p.Name, p.Name)
 	}
 	if err := waitForHealthy(ctx, p, io); err != nil {
-		io.warn(err.Error())
+		return err
 	}
 	p.Lock.LastUp = time.Now().UTC()
 	_ = p.Manager.SaveLock(p.Lock)

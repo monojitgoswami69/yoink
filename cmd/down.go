@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -50,9 +51,19 @@ func runDown(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(ui.ProjectHeader(p.Name, ""))
 	if !io.quiet {
+		fmt.Println(ui.ProjectHeader(p.Name, ""))
 		fmt.Println("\n  " + ui.MutedStyle.Render("Stopping…"))
+	}
+	if downVolumes {
+		fmt.Println(ui.ErrorStyle.Render("  ⚠ WARNING: --volumes will permanently delete all data volumes."))
+		fmt.Print("  Continue? [y/N] ")
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
+			io.info("Aborted.")
+			return nil
+		}
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -61,8 +72,15 @@ func runDown(cmd *cobra.Command, args []string) error {
 		fmt.Println(ui.DimStyle.Render(strings.TrimRight(out, "\n")))
 	}
 	if err != nil {
-		return fmt.Errorf("compose down failed: %s", err)
+		return fmt.Errorf("compose down failed: %w", err)
 	}
-	fmt.Println("\n  " + ui.SuccessStyle.Render(ui.SymDone+" Stopped") + "  " + ui.MutedStyle.Render(p.Name))
+	msg := ui.SymDone + " Stopped"
+	if downVolumes {
+		msg = ui.SymDone + " Stopped (volumes deleted)"
+	}
+	fmt.Println("\n  " + ui.SuccessStyle.Render(msg) + "  " + ui.MutedStyle.Render(p.Name))
+	if !io.quiet {
+		fmt.Println(ui.DimStyle.Render("  Restart with: yoink up " + p.Name))
+	}
 	return nil
 }
