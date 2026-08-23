@@ -1,0 +1,72 @@
+/* ==========================================================================
+   YOINK — NEOBRUTALIST DESIGN SYSTEM TOKENS
+   Adherent to light-themed neobrutalism (neobrutalism.dev)
+   ========================================================================== */
+
+:root {
+  /* Canvas & Neutral Backgrounds */
+  --bg-main: #FFFDF5;
+  --bg-alt: #F8F5EE;
+  --bg-card: #FFFFFF;
+  --bg-subtle: #F3EEDF;
+  --bg-dark: #121212;
+
+  /* Solid Line & Text Color */
+  --border-color: #000000;
+  --text-main: #000000;
+  --text-muted: #4A4A4A;
+  --text-subtle: #6B6B6B;
+  --text-inverse: #FFFFFF;
+
+  /* Saturated Neobrutalist Pastel Accents */
+  --neo-yellow: #FFDE59;
+  --neo-yellow-light: #FFF099;
+  --neo-green: #A6FA53;
+  --neo-green-light: #D4FF8C;
+  --neo-pink: #FF6EA7;
+  --neo-pink-light: #FFA3C8;
+  --neo-purple: #C4A1FF;
+  --neo-purple-light: #E2D1FF;
+  --neo-cyan: #70D6FF;
+  --neo-cyan-light: #B8EBFF;
+  --neo-orange: #FFA94D;
+  --neo-orange-light: #FFCCA3;
+  --neo-red: #FF5A5A;
+
+  /* Neobrutalist Border Widths */
+  --border-sm: 2px solid var(--border-color);
+  --border-md: 3px solid var(--border-color);
+  --border-lg: 4px solid var(--border-color);
+  --border-xl: 5px solid var(--border-color);
+
+  /* Hard Drop Shadows (Zero blur - Neobrutalism signature) */
+  --shadow-sm: 2px 2px 0px #000000;
+  --shadow-md: 4px 4px 0px #000000;
+  --shadow-lg: 6px 6px 0px #000000;
+  --shadow-xl: 8px 8px 0px #000000;
+  --shadow-2xl: 12px 12px 0px #000000;
+  --shadow-hover: 2px 2px 0px #000000;
+  --shadow-active: 0px 0px 0px #000000;
+
+  /* Corner Radii */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-full: 9999px;
+
+  /* Typography */
+  --font-heading: 'Plus Jakarta Sans', 'Bricolage Grotesque', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', Consolas, monospace;
+
+  /* Layout Spacing */
+  --max-width: 1240px;
+  --max-width-docs: 1440px;
+  --header-height: 72px;
+
+  /* Transitions */
+  --transition-fast: 0.12s ease;
+  --transition-normal: 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}

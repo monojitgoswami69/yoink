@@ -1,0 +1,197 @@
+/* ==========================================================================
+   YOINK — 8-STEP PIPELINE
+   ========================================================================== */
+
+.pipeline-wrapper {
+  margin-top: 3rem;
+}
+
+.pipeline-steps {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1.25rem;
+  margin-bottom: 2rem;
+}
+
+@media (max-width: 960px) {
+  .pipeline-steps {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 600px) {
+  .pipeline-steps {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pipeline-step-card {
+  background-color: var(--bg-card);
+  border: var(--border-md);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: 1.25rem;
+  position: relative;
+  transition: all var(--transition-fast);
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+
+.pipeline-step-card:hover {
+  transform: translate(2px, 2px);
+  box-shadow: var(--shadow-hover);
+  background-color: var(--neo-yellow);
+}
+
+.step-card-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  background-color: #000000;
+  color: #FFFFFF;
+  border-radius: var(--radius-xs);
+  font-family: var(--font-mono);
+  font-weight: 800;
+  font-size: 0.9rem;
+  margin-bottom: 0.75rem;
+}
+
+.pipeline-step-card.active .step-card-num {
+  background-color: #000;
+  color: var(--neo-yellow);
+}
+
+.step-card-title {
+  font-family: var(--font-heading);
+  font-size: 1.1rem;
+  font-weight: 800;
+  margin-bottom: 0.35rem;
+  color: var(--text-main);
+}
+
+.step-card-desc {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.pipeline-inspector {
+  background-color: var(--bg-card);
+  border: var(--border-lg);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 1fr 1.2fr;
+}
+
+@media (max-width: 860px) {
+  .pipeline-inspector {
+    grid-template-columns: 1fr;
+  }
+}
+
+.inspector-info {
+  padding: 2.25rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.inspector-stage-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 800;
+  background-color: var(--neo-pink);
+  border: var(--border-sm);
+  padding: 0.25rem 0.65rem;
+  border-radius: var(--radius-xs);
+  box-shadow: var(--shadow-sm);
+  margin-bottom: 1rem;
+  align-self: flex-start;
+}
+
+.inspector-title {
+  font-size: 1.85rem;
+  margin-bottom: 0.75rem;
+}
+
+.inspector-text {
+  font-size: 1rem;
+  line-height: 1.6;
+  color: var(--text-muted);
+  margin-bottom: 1.5rem;
+}
+
+.inspector-points {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.inspector-point {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+
+.inspector-point-icon {
+  color: var(--neo-green);
+  background-color: #000;
+  border-radius: 50%;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.inspector-output {
+  background-color: #18181B;
+  border-left: var(--border-md);
+  padding: 1.75rem;
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 860px) {
+  .inspector-output {
+    border-left: none;
+    border-top: var(--border-md);
+  }
+}
+
+.inspector-output-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid #3F3F46;
+  color: #A1A1AA;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.inspector-code {
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: #F4F4F5;
+  white-space: pre-wrap;
+  flex: 1;
+  overflow-y: auto;
+}

@@ -1,0 +1,166 @@
+/* ==========================================================================
+   YOINK — BUTTONS & INTERACTIVE CONTROLS
+   ========================================================================== */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 0.85rem 1.65rem;
+  font-family: var(--font-heading);
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--text-main);
+  background-color: var(--bg-card);
+  border: var(--border-md);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  cursor: pointer;
+  text-decoration: none;
+  line-height: 1;
+  transition: transform var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
+  user-select: none;
+  position: relative;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  transform: translate(2px, 2px);
+  box-shadow: var(--shadow-hover);
+}
+
+.btn:active {
+  transform: translate(4px, 4px);
+  box-shadow: var(--shadow-active);
+}
+
+.btn:focus-visible {
+  outline: 3px solid #000000;
+  outline-offset: 2px;
+}
+
+.btn-primary, .btn-yellow {
+  background-color: var(--neo-yellow);
+}
+.btn-primary:hover, .btn-yellow:hover {
+  background-color: var(--neo-yellow);
+}
+
+.btn-green {
+  background-color: var(--neo-green);
+}
+.btn-green:hover {
+  background-color: var(--neo-green);
+}
+
+.btn-purple {
+  background-color: var(--neo-purple);
+}
+.btn-purple:hover {
+  background-color: var(--neo-purple);
+}
+
+.btn-pink {
+  background-color: var(--neo-pink);
+}
+.btn-pink:hover {
+  background-color: var(--neo-pink);
+}
+
+.btn-cyan {
+  background-color: var(--neo-cyan);
+}
+.btn-cyan:hover {
+  background-color: var(--neo-cyan);
+}
+
+.btn-dark {
+  background-color: var(--bg-dark);
+  color: var(--text-inverse);
+}
+.btn-dark:hover {
+  background-color: #000000;
+}
+
+.btn-white {
+  background-color: #FFFFFF;
+}
+.btn-white:hover {
+  background-color: #FFFFFF;
+}
+
+.btn-ghost {
+  background-color: transparent;
+  box-shadow: none;
+  border: var(--border-sm);
+}
+.btn-ghost:hover {
+  background-color: var(--neo-yellow);
+  transform: translate(-1px, -1px);
+  box-shadow: var(--shadow-sm);
+}
+
+.btn-sm {
+  padding: 0.5rem 0.95rem;
+  font-size: 0.875rem;
+  border-width: 2px;
+  box-shadow: var(--shadow-sm);
+}
+.btn-sm:hover {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0px #000;
+}
+.btn-sm:active {
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 #000;
+}
+
+.btn-lg {
+  padding: 1.1rem 2.25rem;
+  font-size: 1.15rem;
+  border-width: 4px;
+  box-shadow: var(--shadow-lg);
+}
+.btn-lg:hover {
+  transform: translate(3px, 3px);
+  box-shadow: 3px 3px 0px #000;
+}
+.btn-lg:active {
+  transform: translate(6px, 6px);
+  box-shadow: 0 0 0 #000;
+}
+
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  background-color: var(--neo-yellow);
+  color: var(--text-main);
+  border: var(--border-sm);
+  border-radius: var(--radius-xs);
+  padding: 0.45rem 0.85rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+  font-weight: 700;
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.copy-btn:hover {
+  transform: translate(1px, 1px);
+  box-shadow: 1px 1px 0 #000;
+  background-color: var(--neo-green-light);
+}
+
+.copy-btn:active {
+  transform: translate(2px, 2px);
+  box-shadow: 0 0 0 #000;
+}
+
+.copy-btn.copied {
+  background-color: var(--neo-green);
+  color: #000000;
+}

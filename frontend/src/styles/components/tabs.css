@@ -1,0 +1,72 @@
+/* ==========================================================================
+   YOINK — TABS COMPONENT
+   ========================================================================== */
+
+.tabs-container {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+.tabs-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-bottom: -3px;
+  position: relative;
+  z-index: 2;
+}
+
+.tab-btn {
+  background-color: var(--bg-alt);
+  color: var(--text-muted);
+  border: var(--border-md);
+  border-bottom: none;
+  border-top-left-radius: var(--radius-sm);
+  border-top-right-radius: var(--radius-sm);
+  padding: 0.65rem 1.25rem;
+  font-family: var(--font-heading);
+  font-weight: 800;
+  font-size: 0.95rem;
+  cursor: pointer;
+  box-shadow: 2px -2px 0px #000;
+  transition: all var(--transition-fast);
+}
+
+.tab-btn:hover {
+  background-color: var(--neo-yellow);
+  color: var(--text-main);
+}
+
+.tab-btn.active {
+  background-color: var(--bg-card);
+  color: var(--text-main);
+  border-bottom: 3px solid var(--bg-card);
+  box-shadow: 4px -2px 0px #000;
+  transform: translateY(-2px);
+}
+
+.tab-btn.active-yellow { background-color: var(--neo-yellow); border-bottom-color: var(--neo-yellow); }
+.tab-btn.active-green { background-color: var(--neo-green); border-bottom-color: var(--neo-green); }
+.tab-btn.active-purple { background-color: var(--neo-purple); border-bottom-color: var(--neo-purple); }
+
+.tab-pane {
+  display: none;
+  background-color: var(--bg-card);
+  border: var(--border-lg);
+  border-radius: 0 var(--radius-md) var(--radius-md) var(--radius-md);
+  box-shadow: var(--shadow-lg);
+  padding: 1.75rem;
+  position: relative;
+  z-index: 1;
+}
+
+.tab-pane.active {
+  display: block;
+  animation: tab-fade 0.2s ease;
+}
+
+@keyframes tab-fade {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}

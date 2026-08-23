@@ -1,0 +1,276 @@
+/* ==========================================================================
+   YOINK — BASE STYLES & RESET
+   ========================================================================== */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior-y: none;
+  background-color: var(--bg-main);
+  scroll-padding-top: calc(var(--header-height) + 1.25rem);
+}
+
+[id] {
+  scroll-margin-top: calc(var(--header-height) + 1.25rem);
+}
+
+body {
+  font-family: var(--font-body);
+  background-color: var(--bg-main);
+  color: var(--text-main);
+  line-height: 1.6;
+  min-height: 100vh;
+  overflow-x: hidden;
+  overscroll-behavior-y: none;
+  background-image: radial-gradient(#000000 0.75px, transparent 0.75px);
+  background-size: 24px 24px;
+}
+
+/* Accessibility skip link */
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 1rem;
+  background: var(--neo-yellow);
+  color: var(--text-main);
+  padding: 0.5rem 1rem;
+  border: var(--border-md);
+  box-shadow: var(--shadow-md);
+  font-weight: 700;
+  z-index: 9999;
+  transition: top 0.2s;
+}
+.skip-link:focus {
+  top: 1rem;
+}
+
+/* Typography Defaults */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--font-heading);
+  color: var(--text-main);
+  font-weight: 800;
+  line-height: 1.15;
+  letter-spacing: -0.02em;
+}
+
+h1 {
+  font-size: clamp(2rem, 4.4vw, 3.4rem);
+  font-weight: 900;
+  letter-spacing: -0.03em;
+}
+
+h2 {
+  font-size: clamp(1.6rem, 3.2vw, 2.2rem);
+}
+
+h3 {
+  font-size: clamp(1.15rem, 2vw, 1.45rem);
+}
+
+h4 {
+  font-size: 1.15rem;
+}
+
+p {
+  margin-bottom: 1rem;
+  color: var(--text-muted);
+}
+p:last-child {
+  margin-bottom: 0;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+code, kbd, samp, pre {
+  font-family: var(--font-mono);
+}
+
+/* Layout Containers */
+.container {
+  width: 100%;
+  max-width: var(--max-width);
+  margin-left: auto;
+  margin-right: auto;
+  padding-left: 1.5rem;
+  padding-right: 1.5rem;
+}
+
+.container-narrow {
+  max-width: 900px;
+}
+
+.container-wide {
+  max-width: var(--max-width-docs);
+}
+
+.section {
+  padding: 5rem 0;
+  position: relative;
+}
+
+.section-lg {
+  padding: 7rem 0;
+}
+
+.section-bordered {
+  border-top: var(--border-lg);
+  border-bottom: var(--border-lg);
+  background-color: var(--bg-alt);
+}
+
+/* Section Header standard pattern */
+.section-header {
+  text-align: center;
+  max-width: 760px;
+  margin: 0 auto 3.5rem;
+}
+
+.section-title {
+  margin-bottom: 1rem;
+}
+
+.section-subtitle {
+  font-size: 1.15rem;
+  color: var(--text-muted);
+}
+
+/* Neobrutalist Badges & Pill Tags */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: var(--radius-full);
+  border: var(--border-sm);
+  box-shadow: var(--shadow-sm);
+  font-family: var(--font-heading);
+  font-size: 0.85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background-color: var(--bg-card);
+  color: var(--text-main);
+}
+
+.badge-yellow { background-color: var(--neo-yellow); }
+.badge-green { background-color: var(--neo-green); }
+.badge-purple { background-color: var(--neo-purple); }
+.badge-pink { background-color: var(--neo-pink); }
+.badge-cyan { background-color: var(--neo-cyan); }
+.badge-orange { background-color: var(--neo-orange); }
+
+.badge-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: #000000;
+  display: inline-block;
+}
+
+.pulse-dot {
+  position: relative;
+}
+.pulse-dot::after {
+  content: '';
+  position: absolute;
+  top: -2px;
+  left: -2px;
+  right: -2px;
+  bottom: -2px;
+  border-radius: 50%;
+  background-color: inherit;
+  opacity: 0.7;
+  animation: pulse-ring 1.8s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+}
+
+@keyframes pulse-ring {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(2.2); opacity: 0; }
+}
+
+/* Highlighter spans */
+.hl {
+  background-color: var(--neo-yellow);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-xs);
+  border: 2px solid #000;
+  box-shadow: 2px 2px 0px #000;
+  display: inline-block;
+  transform: rotate(-1deg);
+}
+
+.hl-green {
+  background-color: var(--neo-green);
+  transform: rotate(1deg);
+}
+
+.hl-pink {
+  background-color: var(--neo-pink);
+  transform: rotate(-1.5deg);
+}
+
+.hl-cyan {
+  background-color: var(--neo-cyan);
+  transform: rotate(1.2deg);
+}
+
+/* Grid Utilities */
+.grid {
+  display: grid;
+  gap: 1.5rem;
+}
+
+.grid-2 {
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+}
+
+.grid-3 {
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.grid-4 {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+@media (max-width: 768px) {
+  .section {
+    padding: 3rem 0;
+  }
+  .section-lg {
+    padding: 4rem 0;
+  }
+  .section-header {
+    margin-bottom: 2rem;
+  }
+  .container {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+  .grid-2, .grid-3, .grid-4 {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 480px) {
+  h1 {
+    font-size: 2.1rem;
+  }
+  h2 {
+    font-size: 1.75rem;
+  }
+  .section {
+    padding: 2.5rem 0;
+  }
+  .section-subtitle {
+    font-size: 1rem;
+  }
+}
