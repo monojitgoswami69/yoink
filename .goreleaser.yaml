@@ -1,0 +1,76 @@
+version: 2
+
+project_name: yoink
+
+before:
+  hooks:
+    - go test ./...
+    - go vet ./...
+    - go build ./...
+
+builds:
+  - id: yoink
+    main: .
+    binary: yoink
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+      - -X yoink/cmd.Version={{.Version}}
+      - -X yoink/cmd.BuildTime={{.Date}}
+      - -X main.commit={{.Commit}}
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- if eq .Os "darwin" }}Darwin
+      {{- else if eq .Os "linux" }}Linux
+      {{- else if eq .Os "windows" }}Windows
+      {{- end }}_
+      {{- if eq .Arch "amd64" }}x86_64
+      {{- else if eq .Arch "arm64" }}arm64
+      {{- end }}
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    files:
+      - none*
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  version_template: "{{ .Tag }}-next"
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - 'Merge pull request'
+      - 'Merge branch'
+
+release:
+  github:
+    owner: monojitgoswami69
+    name: yoink
+  draft: false
+  prerelease: auto
+  name_template: "{{ .Tag }}"
