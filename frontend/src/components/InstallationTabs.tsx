@@ -34,12 +34,12 @@ export function InstallationTabs() {
         <div className="tab-pane active" id="tab-curl">
           <h3 style={{ marginBottom: "0.75rem" }}>Universal One-Line Installer</h3>
           <p>
-            Detects your OS and CPU architecture, downloads the release binary, verifies permissions, and installs to <code>~/.local/bin</code> (or <code>/usr/local/bin</code>).
+            The recommended way to install Yoink on macOS and Linux. Detects your OS and architecture automatically:
           </p>
 
           <CodeBlock
-            code="curl -sSfL https://raw.githubusercontent.com/monojitgoswami69/yoink/main/install.sh | sh"
-            headerTitle="curl installer"
+            code="curl -sSfL https://raw.githubusercontent.com/monojitgoswami69/yoink/main/install.sh | bash"
+            headerTitle="Shell Installer"
           />
 
           <div className="callout callout-tip">

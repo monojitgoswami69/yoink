@@ -7,7 +7,7 @@ import { useToast } from "./Toast";
 export function CurlInstallBar() {
   const [copied, setCopied] = useState(false);
   const { showToast } = useToast();
-  const installCmd = "curl -sSfL https://raw.githubusercontent.com/monojitgoswami69/yoink/main/install.sh | sh";
+  const installCmd = "curl -sSfL https://raw.githubusercontent.com/monojitgoswami69/yoink/main/install.sh | bash";
 
   const handleCopy = async () => {
     try {

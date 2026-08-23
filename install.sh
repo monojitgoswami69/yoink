@@ -6,7 +6,7 @@ set -euo pipefail
 # Falls back to building from source if no pre-built binary exists.
 #
 # Usage:
-#   curl -sSfL https://raw.githubusercontent.com/monojitgoswami69/yoink/main/install.sh | sh
+#   curl -sSfL https://raw.githubusercontent.com/monojitgoswami69/yoink/main/install.sh | bash
 #
 # Flags:
 #   --verbose   Show diagnostic info (OS, arch, versions, URLs)

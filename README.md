@@ -26,7 +26,7 @@ Yoink clones a repository, detects its services, generates Dockerfiles and docke
 ### Option 1: One-line installer (recommended)
 
 ```bash
-curl -sSfL https://raw.githubusercontent.com/monojitgoswami69/yoink/main/install.sh | sh
+curl -sSfL https://raw.githubusercontent.com/monojitgoswami69/yoink/main/install.sh | bash
 ```
 
 The installer detects your OS and architecture, downloads the correct pre-built binary from GitHub Releases, and places it in `~/.local/bin` (or `/usr/local/bin` if run as root). It provides PATH instructions tailored to your shell (bash, zsh, fish). If no pre-built binary is available, it falls back to building from source.

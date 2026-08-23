@@ -11,7 +11,7 @@ export function DocsInstallation() {
         </p>
 
         <CodeBlock
-          code="curl -sSfL https://raw.githubusercontent.com/monojitgoswami69/yoink/main/install.sh | sh"
+          code="curl -sSfL https://raw.githubusercontent.com/monojitgoswami69/yoink/main/install.sh | bash"
           headerTitle="One-Line Install Command"
         />
 
