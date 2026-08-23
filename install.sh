@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Yoink universal installer with self-update
+# Yoink cross-platform installer
 # Installs or upgrades the Yoink CLI from GitHub Releases.
-# Falls back to building from source if no pre-built binary exists.
+# Works on Linux, macOS, and Windows (Git Bash / MSYS2 / Cygwin).
 #
 # Usage:
 #   curl -sSfL https://raw.githubusercontent.com/monojitgoswami69/yoink/main/install.sh | bash
@@ -67,20 +67,40 @@ esac
 vinfo "OS: ${OS_NAME}"
 vinfo "Architecture: ${ARCH_NAME}"
 
+# ── Binary name per OS ─────────────────────────────────────────────────────
+
+if [ "$OS" = "windows" ]; then
+  BIN_NAME="yoink.exe"
+else
+  BIN_NAME="yoink"
+fi
+
 # ── Find existing installation ─────────────────────────────────────────────
 
 find_existing_binary() {
-  # Check PATH first
+  # Check PATH first (works on all OSes via Git Bash)
   if command -v yoink >/dev/null 2>&1; then
     command -v yoink
     return 0
   fi
-  # Check standard locations
-  for dir in /usr/local/bin "$HOME/.local/bin" "$HOME/bin"; do
-    if [ -x "${dir}/yoink" ]; then
-      echo "${dir}/yoink"
-      return 0
-    fi
+  # Windows: also try `where`
+  if [ "$OS" = "windows" ]; then
+    local found
+    found="$(where yoink 2>/dev/null | head -1)" && { echo "$found"; return 0; }
+    found="$(where yoink.exe 2>/dev/null | head -1)" && { echo "$found"; return 0; }
+  fi
+  # Check standard locations per OS
+  local dirs
+  if [ "$OS" = "windows" ]; then
+    dirs="${LOCALAPPDATA:-${USERPROFILE:-$HOME}/AppData/Local}/Programs/yoink /usr/local/bin $HOME/.local/bin $HOME/bin"
+  else
+    dirs="/usr/local/bin $HOME/.local/bin $HOME/bin"
+  fi
+  for dir in $dirs; do
+    local candidate="${dir}/${BIN_NAME}"
+    [ -f "$candidate" ] && [ -x "$candidate" ] && { echo "$candidate"; return 0; }
+    # On Windows in Git Bash, .exe extension might be implicit
+    [ "$OS" = "windows" ] && [ -f "${dir}/yoink.exe" ] && { echo "${dir}/yoink.exe"; return 0; }
   done
   return 1
 }
@@ -89,7 +109,6 @@ get_installed_version() {
   local bin="$1"
   local ver
   ver="$("$bin" --version 2>/dev/null | grep -oE 'v?[0-9]+\.[0-9]+\.[0-9]+' | head -1)" || true
-  # Normalize: ensure leading v
   case "$ver" in
     v*) ;;
     *) ver="v${ver}" ;;
@@ -107,7 +126,6 @@ get_latest_version() {
 # ── Compare semantic versions ──────────────────────────────────────────────
 
 version_ge() {
-  # Returns 0 if $1 >= $2, 1 otherwise
   local a="$1" b="$2"
   a="${a#v}" ; b="${b#v}"
   local a_major a_minor a_patch b_major b_minor b_patch
@@ -131,6 +149,10 @@ determine_install_dir() {
   # If an existing binary is found, use its directory
   if [ -n "${EXISTING_BIN:-}" ] && [ -d "$(dirname "$EXISTING_BIN")" ]; then
     dirname "$EXISTING_BIN"
+    return
+  fi
+  if [ "$OS" = "windows" ]; then
+    echo "${LOCALAPPDATA:-${USERPROFILE:-$HOME}/AppData/Local}/Programs/yoink"
     return
   fi
   if [ "$(id -u)" -eq 0 ]; then
@@ -165,7 +187,6 @@ if [ -z "$TARGET_VER" ]; then
 fi
 
 if [ -z "$TARGET_VER" ]; then
-  # No GitHub release available — fall through to source build
   vinfo "No GitHub release found, will build from source"
 else
   vinfo "Latest GitHub release: ${TARGET_VER}"
@@ -175,18 +196,15 @@ fi
 
 if [ -n "$INSTALLED_VER" ] && [ -n "$TARGET_VER" ]; then
   if [ "$INSTALLED_VER" = "$TARGET_VER" ]; then
-    info "Yoink already installed."
-    info "Current version: ${INSTALLED_VER}"
+    info "Yoink ${INSTALLED_VER} is already installed."
     info ""
     info "Run: yoink help"
     exit 0
   elif version_ge "$INSTALLED_VER" "$TARGET_VER"; then
-    info "Downgrading Yoink:"
-    info "  ${INSTALLED_VER} -> ${TARGET_VER}"
+    info "Downgrading Yoink: ${INSTALLED_VER} -> ${TARGET_VER}"
     info ""
   else
-    info "Upgrading Yoink:"
-    info "  ${INSTALLED_VER} -> ${TARGET_VER}"
+    info "Upgrading Yoink: ${INSTALLED_VER} -> ${TARGET_VER}"
     info ""
   fi
 fi
@@ -196,20 +214,22 @@ fi
 INSTALL_DIR="$(determine_install_dir)"
 vinfo "Install directory: ${INSTALL_DIR}"
 
-# Check if we need root
+# Check if we need root (Unix only)
 NEEDS_ROOT=false
-if [ -n "$EXISTING_BIN" ]; then
-  if [ ! -w "$(dirname "$EXISTING_BIN")" ]; then
+if [ "$OS" != "windows" ]; then
+  if [ -n "$EXISTING_BIN" ]; then
+    if [ ! -w "$(dirname "$EXISTING_BIN")" ]; then
+      NEEDS_ROOT=true
+    fi
+  elif [ "$INSTALL_DIR" = "/usr/local/bin" ] && [ "$(id -u)" -ne 0 ]; then
     NEEDS_ROOT=true
   fi
-elif [ "$INSTALL_DIR" = "/usr/local/bin" ] && [ "$(id -u)" -ne 0 ]; then
-  NEEDS_ROOT=true
 fi
 
-if $NEEDS_ROOT && [ "$(id -u)" -ne 0 ]; then
+if $NEEDS_ROOT; then
   info "Install location requires root access: ${INSTALL_DIR}"
   info "Re-run with sudo:"
-  info "  curl -sSfL https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/install.sh | sudo sh"
+  info "  curl -sSfL https://raw.githubusercontent.com/${REPO_OWNER}/${REPO_NAME}/main/install.sh | sudo bash"
   exit 1
 fi
 
@@ -237,16 +257,16 @@ if [ -n "$TARGET_VER" ]; then
   if [ "$OS" = "windows" ]; then
     command -v unzip >/dev/null 2>&1 || err "unzip is required on Windows."
     (cd "$tmp" && unzip -o -q "$ARCHIVE")
-    NEW_BINARY="${tmp}/${REPO_NAME}.exe"
+    NEW_BINARY="${tmp}/${BIN_NAME}"
     [ -f "$NEW_BINARY" ] || NEW_BINARY="${tmp}/${REPO_NAME}"
     [ -f "$NEW_BINARY" ] || err "Could not find binary in archive."
-    BINARY="${INSTALL_DIR}/${REPO_NAME}.exe"
+    BINARY="${INSTALL_DIR}/${BIN_NAME}"
   else
     command -v tar >/dev/null 2>&1 || err "tar is required."
     (cd "$tmp" && tar xzf "$ARCHIVE")
     NEW_BINARY="${tmp}/${REPO_NAME}"
     [ -f "$NEW_BINARY" ] || err "Could not find binary in archive."
-    BINARY="${INSTALL_DIR}/${REPO_NAME}"
+    BINARY="${INSTALL_DIR}/${BIN_NAME}"
   fi
 
   # Preserve existing binary until replacement succeeds
@@ -256,8 +276,6 @@ if [ -n "$TARGET_VER" ]; then
   fi
 
   install -m 0755 "$NEW_BINARY" "$BINARY" || err "Could not install binary."
-
-  # Clean up backup on success
   rm -f "${BINARY}.bak"
 
 else
@@ -272,7 +290,7 @@ else
   (cd "${tmp}/${REPO_NAME}" && go build -ldflags "-s -w" -o "${REPO_NAME}" .)
 
   mkdir -p "$INSTALL_DIR"
-  BINARY="${INSTALL_DIR}/${REPO_NAME}"
+  BINARY="${INSTALL_DIR}/${BIN_NAME}"
 
   if [ -f "$BINARY" ]; then
     cp "$BINARY" "${BINARY}.bak"
@@ -287,22 +305,83 @@ fi
 info ""
 info "Yoink installed to: ${BINARY}"
 
-if [ "$OS" != "windows" ]; then
+# Verify binary executes and version output works
+if [ "$OS" = "windows" ]; then
   VER_OUTPUT="$("$BINARY" --version 2>&1)" || VER_OUTPUT="(version check failed)"
-  info "  ${VER_OUTPUT}"
+else
+  VER_OUTPUT="$("$BINARY" --version 2>&1)" || VER_OUTPUT="(version check failed)"
 fi
+info "  ${VER_OUTPUT}"
 
 # ── PATH management ───────────────────────────────────────────────────────
 
-case ":${PATH}:" in
-  *":${INSTALL_DIR}:"*)
-    info ""
-    info "Yoink is ready. Run: yoink help"
-    ;;
-  *)
-    info ""
-    info "${INSTALL_DIR} is not in your PATH."
+# Convert Windows path for PATH comparison
+path_contains_dir() {
+  local dir="$1"
+  case ":${PATH}:" in
+    *":${dir}:"*) return 0 ;;
+  esac
+  # Windows: also check with backslashes and drive letter variations
+  if [ "$OS" = "windows" ]; then
+    local windir
+    windir="$(echo "$dir" | sed 's|^/\([a-zA-Z]\)/|\U\1:/|; s|/|\\|g')"
+    case ":${PATH}:" in
+      *":${windir}:"*) return 0 ;;
+    esac
+    # Also check lowercase drive
+    local lowdir
+    lowdir="$(echo "$dir" | sed 's|^/\([a-zA-Z]\)/|\l\1:/|; s|/|\\|g')"
+    case ":${PATH}:" in
+      *":${lowdir}:"*) return 0 ;;
+    esac
+  fi
+  return 1
+}
 
+if path_contains_dir "$INSTALL_DIR"; then
+  info ""
+  info "Yoink is ready. Run: yoink help"
+else
+  info ""
+  info "${INSTALL_DIR} is not in your PATH."
+
+  if [ "$OS" = "windows" ]; then
+    # Windows: try to add to user PATH automatically via PowerShell
+    info "Attempting to add to Windows user PATH..."
+    # Convert to Windows-style path
+    WIN_INSTALL_DIR="$(echo "$INSTALL_DIR" | sed 's|^/\([a-zA-Z]\)/|\U\1:/|; s|/|\\|g')"
+    vinfo "Windows path: ${WIN_INSTALL_DIR}"
+
+    # Use PowerShell to add to user PATH (no admin required)
+    if command -v powershell >/dev/null 2>&1; then
+      powershell -NoProfile -Command "
+        \$current = [Environment]::GetEnvironmentVariable('Path', 'User')
+        if (\$current -notlike \"*${WIN_INSTALL_DIR}*\") {
+          [Environment]::SetEnvironmentVariable('Path', \"\$current;${WIN_INSTALL_DIR}\", 'User')
+          Write-Host 'Added ${WIN_INSTALL_DIR} to user PATH'
+        } else {
+          Write-Host 'Already in PATH'
+        }
+      " 2>&1 && {
+        info "Added ${WIN_INSTALL_DIR} to user PATH."
+        info "Restart PowerShell or cmd for changes to take effect."
+        info "Or run: set PATH=%PATH%;${WIN_INSTALL_DIR}"
+      } || {
+        info "Could not automatically add to PATH."
+        info "Add this to your PATH manually:"
+        info "  ${WIN_INSTALL_DIR}"
+        info "Or in PowerShell:"
+        info "  [Environment]::SetEnvironmentVariable('Path', \$env:Path + ';${WIN_INSTALL_DIR}', 'User')"
+      }
+    else
+      info "PowerShell not found. Add to PATH manually:"
+      info "  ${WIN_INSTALL_DIR}"
+    fi
+    info ""
+    info "After restarting your terminal, run: yoink help"
+
+  else
+    # Unix: provide shell-specific instructions
     SHELL_NAME="$(basename "${SHELL:-}")"
 
     case "$SHELL_NAME" in
@@ -341,8 +420,8 @@ case ":${PATH}:" in
     info "  export PATH=\"${INSTALL_DIR}:\$PATH\""
     info ""
     info "Then run: yoink help"
-    ;;
-esac
+  fi
+fi
 
 info ""
 info "Prerequisites at runtime:"
