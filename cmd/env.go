@@ -19,7 +19,7 @@ var envCmd = &cobra.Command{
 	Short: "Manage application environment variables",
 	Long: `Manage the environment variables a project's services read at runtime.
 
-  yoink env my-app                 Interactive browser/editor
+  yoink env my-app                 Interactive editor (shows overrides)
   yoink env my-app list            List vars for each service (masked)
   yoink env my-app set KEY=value   Set an override (non-interactive)
   yoink env my-app unset KEY       Remove an override
@@ -75,7 +75,7 @@ func envDir(p *project.Project, serviceID string) string {
 }
 
 // envList prints the .env.example keys for each service with values masked
-// from the template; overrides are noted.
+// from the template; overrides are noted with *.
 func envList(p *project.Project, io *initIO) error {
 	overrides, _ := p.Manager.LoadOverrides()
 	for _, svc := range p.Lock.Services {
@@ -93,7 +93,7 @@ func envList(p *project.Project, io *initIO) error {
 				val = mask(v)
 				marker = ui.SuccessStyle.Render("*")
 			}
-			fmt.Printf("  %s %-20s %s\n", marker, k, ui.DimStyle.Render(val))
+			fmt.Printf("  %s %-28s %s\n", marker, k, ui.DimStyle.Render(val))
 		}
 	}
 	fmt.Println()
@@ -105,7 +105,6 @@ func envSet(p *project.Project, kv string) error {
 	if !ok {
 		return fmt.Errorf("expected KEY=value, got %q", kv)
 	}
-	// Apply to the first app service that declares the key, or all if none.
 	targets := []string{}
 	for _, svc := range p.Lock.Services {
 		if svcHasVar(p, svc.ID, key) || len(p.Lock.Services) == 1 {
@@ -148,7 +147,8 @@ func envUnset(p *project.Project, key string) error {
 }
 
 func envInteractive(p *project.Project, io *initIO) error {
-	// Pick a service, then a var, then edit it.
+	overrides, _ := p.Manager.LoadOverrides()
+
 	svcIDs := make([]string, len(p.Lock.Services))
 	for i, s := range p.Lock.Services {
 		svcIDs[i] = fmt.Sprintf("%s (%s)", s.ID, s.Framework)
@@ -158,6 +158,7 @@ func envInteractive(p *project.Project, io *initIO) error {
 		return nil
 	}
 	svc := p.Lock.Services[idx]
+
 	example := filepath.Join(envDir(p, svc.ID), ".env.example")
 	data, err := os.ReadFile(example)
 	if err != nil {
@@ -168,15 +169,34 @@ func envInteractive(p *project.Project, io *initIO) error {
 		io.info("No variables to edit.")
 		return nil
 	}
+
+	// Build labels showing BOTH override values (if set) and template defaults.
+	// Override values take priority in display.
 	vlabels := make([]string, len(keys))
 	for i, k := range keys {
-		vlabels[i] = fmt.Sprintf("%-20s %s", k, ui.DimStyle.Render(maskValue(string(data), k)))
+		displayVal := ""
+		source := ""
+		if ov, hasOverride := overrides[svc.ID][k]; hasOverride {
+			displayVal = mask(ov)
+			source = "override"
+		} else {
+			tmplVal := envValue(string(data), k)
+			displayVal = mask(tmplVal)
+			if tmplVal == "" {
+				source = "not set"
+			} else {
+				source = "template"
+			}
+		}
+		vlabels[i] = fmt.Sprintf("%-28s %s  (%s)", k, ui.DimStyle.Render(displayVal), source)
 	}
 	vlabels = append(vlabels, "Add new variable")
+
 	vi := selectFromList(vlabels)
 	if vi == -1 {
 		return nil
 	}
+
 	var key, def string
 	if vi == len(vlabels)-1 {
 		fmt.Print("  New KEY: ")
@@ -186,10 +206,20 @@ func envInteractive(p *project.Project, io *initIO) error {
 		}
 	} else {
 		key = keys[vi]
-		def = envValue(string(data), key)
-		_ = def
+		// Show the current override value as default if set, otherwise template value.
+		if ov, hasOverride := overrides[svc.ID][key]; hasOverride {
+			def = ov
+		} else {
+			def = envValue(string(data), key)
+		}
 	}
-	fmt.Printf("  Value for %s%s: ", key, orEmpty(def))
+
+	prompt := fmt.Sprintf("  Value for %s", key)
+	if def != "" {
+		prompt += " [" + mask(def) + "]"
+	}
+	prompt += ": "
+	fmt.Print(prompt)
 	val := strings.TrimSpace(termio.ReadLine())
 	if val == "" {
 		io.info("Empty value — nothing changed.")
@@ -240,6 +270,7 @@ func maskValue(content, key string) string {
 	return mask(envValue(content, key))
 }
 
+// mask hides sensitive values. Empty shows "(not set)".
 func mask(v string) string {
 	if v == "" {
 		return ui.MutedStyle.Render("(not set)")
@@ -262,11 +293,4 @@ func svcHasVar(p *project.Project, serviceID, key string) bool {
 		}
 	}
 	return false
-}
-
-func orEmpty(s string) string {
-	if s == "" {
-		return ""
-	}
-	return " [" + s + "]"
 }
