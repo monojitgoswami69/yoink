@@ -149,6 +149,7 @@ func envUnset(p *project.Project, key string) error {
 func envInteractive(p *project.Project, io *initIO) error {
 	overrides, _ := p.Manager.LoadOverrides()
 
+	// Pick a service once.
 	svcIDs := make([]string, len(p.Lock.Services))
 	for i, s := range p.Lock.Services {
 		svcIDs[i] = fmt.Sprintf("%s (%s)", s.ID, s.Framework)
@@ -165,71 +166,97 @@ func envInteractive(p *project.Project, io *initIO) error {
 		return fmt.Errorf("no .env.example for %s", svc.ID)
 	}
 	keys := envKeys(string(data))
-	if len(keys) == 0 {
-		io.info("No variables to edit.")
-		return nil
-	}
 
-	// Build labels showing BOTH override values (if set) and template defaults.
-	// Override values take priority in display.
-	vlabels := make([]string, len(keys))
-	for i, k := range keys {
-		displayVal := ""
-		source := ""
-		if ov, hasOverride := overrides[svc.ID][k]; hasOverride {
-			displayVal = mask(ov)
-			source = "override"
-		} else {
-			tmplVal := envValue(string(data), k)
-			displayVal = mask(tmplVal)
-			if tmplVal == "" {
-				source = "not set"
-			} else {
-				source = "template"
-			}
-		}
-		vlabels[i] = fmt.Sprintf("%-28s %s  (%s)", k, ui.DimStyle.Render(displayVal), source)
-	}
-	vlabels = append(vlabels, "Add new variable")
+	// Persistent loop: keep editing until user quits.
+	for {
+		// Reload overrides each iteration so display stays fresh.
+		overrides, _ = p.Manager.LoadOverrides()
 
-	vi := selectFromList(vlabels)
-	if vi == -1 {
-		return nil
-	}
-
-	var key, def string
-	if vi == len(vlabels)-1 {
-		fmt.Print("  New KEY: ")
-		key = strings.TrimSpace(termio.ReadLine())
-		if key == "" {
+		if len(keys) == 0 && len(overrides[svc.ID]) == 0 {
+			io.info("No variables to edit.")
 			return nil
 		}
-	} else {
-		key = keys[vi]
-		// Show the current override value as default if set, otherwise template value.
-		if ov, hasOverride := overrides[svc.ID][key]; hasOverride {
-			def = ov
-		} else {
-			def = envValue(string(data), key)
-		}
-	}
 
-	prompt := fmt.Sprintf("  Value for %s", key)
-	if def != "" {
-		prompt += " [" + mask(def) + "]"
+		// Build labels showing override values (if set) and template defaults.
+		allKeys := make([]string, 0, len(keys))
+		seen := map[string]bool{}
+		for _, k := range keys {
+			if !seen[k] {
+				allKeys = append(allKeys, k)
+				seen[k] = true
+			}
+		}
+		// Also show any override keys not in .env.example.
+		for k := range overrides[svc.ID] {
+			if !seen[k] {
+				allKeys = append(allKeys, k)
+				seen[k] = true
+			}
+		}
+		sort.Strings(allKeys)
+
+		vlabels := make([]string, len(allKeys))
+		for i, k := range allKeys {
+			displayVal := ""
+			source := ""
+			if ov, hasOverride := overrides[svc.ID][k]; hasOverride {
+				displayVal = mask(ov)
+				source = "override"
+			} else {
+				tmplVal := envValue(string(data), k)
+				displayVal = mask(tmplVal)
+				if tmplVal == "" {
+					source = "not set"
+				} else {
+					source = "template"
+				}
+			}
+			vlabels[i] = fmt.Sprintf("%-28s %s  (%s)", k, ui.DimStyle.Render(displayVal), source)
+		}
+		vlabels = append(vlabels, "Add new variable")
+		vlabels = append(vlabels, "Quit (save and exit)")
+
+		vi := selectFromList(vlabels)
+		if vi == -1 || vi == len(vlabels)-1 {
+			io.success(fmt.Sprintf("Saved. Run `yoink up %s` to apply.", p.Name))
+			return nil
+		}
+
+		var key, def string
+		if vi == len(vlabels)-2 {
+			// Add new variable
+			fmt.Print("  New KEY: ")
+			key = strings.TrimSpace(termio.ReadLine())
+			if key == "" {
+				io.info("Empty key — skipping.")
+				continue
+			}
+		} else {
+			key = allKeys[vi]
+			if ov, hasOverride := overrides[svc.ID][key]; hasOverride {
+				def = ov
+			} else {
+				def = envValue(string(data), key)
+			}
+		}
+
+		prompt := fmt.Sprintf("  Value for %s", key)
+		if def != "" {
+			prompt += " [" + mask(def) + "]"
+		}
+		prompt += ": "
+		fmt.Print(prompt)
+		val := strings.TrimSpace(termio.ReadLine())
+		if val == "" {
+			io.info("Empty value — nothing changed.")
+			continue
+		}
+		if err := p.Manager.SetOverride(svc.ID, key, val); err != nil {
+			return err
+		}
+		io.success(fmt.Sprintf("Saved %s", key))
+		// Loop continues — user can edit more variables.
 	}
-	prompt += ": "
-	fmt.Print(prompt)
-	val := strings.TrimSpace(termio.ReadLine())
-	if val == "" {
-		io.info("Empty value — nothing changed.")
-		return nil
-	}
-	if err := p.Manager.SetOverride(svc.ID, key, val); err != nil {
-		return err
-	}
-	io.success(fmt.Sprintf("Saved override %s. Run `yoink up %s` to apply.", key, p.Name))
-	return nil
 }
 
 // envKeys returns the sorted KEY= lines (ignoring comments) from a .env.example.
